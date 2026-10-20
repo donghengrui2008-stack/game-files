@@ -1,0 +1,1881 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>大坝：洪水与电力</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0c1924;
+    color: #e0eaf2;
+    font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    width: 100vw;
+  }
+  #gameCanvas {
+    background: #0d1f2e;
+    border-radius: 8px;
+    box-shadow: 0 0 40px rgba(30, 136, 196, 0.15);
+    cursor: default;
+    max-width: 100vw;
+    max-height: 100vh;
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="960" height="640"></canvas>
+<script>
+// ==================== 游戏配置 ====================
+const CONFIG = {
+  reservoirMax: 100,
+  downstreamMax: 100,
+  initialReservoir: 25,
+  initialDownstream: 40,
+  baseDrainSpeed: 3.5,
+  basePowerPerWater: 1,
+  baseNaturalDrain: 0.2,
+  baseDownstreamEvap: 1.0,
+  baseRainInterval: [16, 32],
+  baseRainAmount: [12, 22],
+  baseRainDuration: [4, 8],
+  flowSpeed: 0.55,
+  housePowerRate: 0.25,
+  houseCount: 8,
+  floodWarningThreshold: 0.80,
+  dryThreshold: 0.20,
+  highWaterThreshold: 0.70,
+  dayDuration: 25,
+  cloudSeedCost: 20,
+  rainBoostBaseCost: 15,
+  rainBoostAmount: [8, 14],
+  rainBoostCooldown: 8,
+};
+
+// ==================== 升级配置 ====================
+const UPGRADES = [
+  {
+    id: 'damHeight', name: '加高坝体', desc: '储水上限 +40',
+    icon: '\u{1F3D7}',
+    effect: (lv) => 40,
+    cost: (lv) => [40, 100, 250, 600, 1400][lv] || 3000 * Math.pow(2, lv - 5),
+    maxLevel: 10
+  },
+  {
+    id: 'generator', name: '扩容发电', desc: '发电效率 +0.4x',
+    icon: '\u{26A1}',
+    effect: (lv) => 0.4,
+    cost: (lv) => [60, 150, 380, 900, 2000][lv] || 4000 * Math.pow(2, lv - 5),
+    maxLevel: 10
+  },
+  {
+    id: 'floodgate', name: '增设闸口', desc: '排水速度 +3/s',
+    icon: '\u{1F6AA}',
+    effect: (lv) => 3,
+    cost: (lv) => [50, 130, 340, 800, 1800][lv] || 3500 * Math.pow(2, lv - 5),
+    maxLevel: 10
+  },
+  {
+    id: 'embankment', name: '村庄堤防', desc: '下游上限 +25',
+    icon: '\u{1F9F1}',
+    effect: (lv) => 25,
+    cost: (lv) => [35, 90, 240, 580, 1300][lv] || 2800 * Math.pow(2, lv - 5),
+    maxLevel: 10
+  },
+  {
+    id: 'drainage', name: '开挖排水渠', desc: '大坝排水 +0.35/s（水排出村外）',
+    icon: '\u{1F6E3}',
+    effect: (lv) => 0.35,
+    cost: (lv) => [80, 200, 500, 1200, 2800][lv] || 5500 * Math.pow(2, lv - 5),
+    maxLevel: 10
+  },
+  {
+    id: 'weatherStation', name: '气象站', desc: '预报+人工降雨',
+    icon: '\u{1F324}',
+    effect: (lv) => 1,
+    cost: (lv) => [150, 450, 1200, 3000, 7000][lv] || 10000 * Math.pow(2, lv - 5),
+    maxLevel: 5
+  },
+  {
+    id: 'rainBoost', name: '雨云召唤器', desc: '消耗电力快速降雨',
+    icon: '\u{2601}\u{FE0F}',
+    effect: (lv) => lv * 2,
+    cost: (lv) => [50, 120, 300, 700, 1600][lv] || 3500 * Math.pow(2, lv - 5),
+    maxLevel: 5
+  }
+];
+
+// ==================== 季节配置 ====================
+const SEASONS = [
+  { name: '春', color: '#4ecdc4', rainMult: 1.25, stormChance: 0.08, desc: '降雨偏多，偶发春汛' },
+  { name: '夏', color: '#f7b731', rainMult: 0.55, stormChance: 0.3, desc: '干旱少雨，偶发暴雨' },
+  { name: '秋', color: '#e17055', rainMult: 1.15, stormChance: 0.12, desc: '连绵阴雨，水位缓涨' },
+  { name: '冬', color: '#74b9ff', rainMult: 0.25, stormChance: 0.04, desc: '降雪积累，待春释放' }
+];
+
+// ==================== 教程配置 ====================
+const TUTORIAL_STEPS = [
+  {
+    title: '欢迎来到大坝管理游戏',
+    icon: '\u{1F3D7}',
+    text: '你是这座大坝的管理员。你的任务是管理水位，保护上游大坝不溢出，同时让下游村庄保持安全的水位。',
+    highlight: null
+  },
+  {
+    title: '上游大坝',
+    icon: '\u{1F4A7}',
+    text: '这是你的大坝。储水量不能超过上限，否则大坝溃坝。水位超过80%时会有黄色警告，必须立即泄洪。',
+    highlight: 'dam'
+  },
+  {
+    title: '下游村庄',
+    icon: '\u{1F3E0}',
+    text: '村庄水位需要保持在20%~70%之间。太低会干旱，太高会淹没房屋。水位每秒自然蒸发1点，但泄洪会快速增加下游水位。',
+    highlight: 'village'
+  },
+  {
+    title: '泄洪闸门',
+    icon: '\u{1F6A6}',
+    text: '点击"开闸泄洪"可以把大坝的水排向下游河道。水流经过河道到达村庄时会产生电力！这是获取电力的主要途径。',
+    highlight: 'floodgate'
+  },
+  {
+    title: '排水渠',
+    icon: '\u{1F6E3}',
+    text: '点击"排水"按钮，大坝的水会沿着左侧排水渠缓慢排出到外界，不进入下游村庄。速度很慢但安全，适合精细调控水位。',
+    highlight: 'drainage'
+  },
+  {
+    title: '电力与升级',
+    icon: '\u{26A1}',
+    text: '泄洪和村庄房屋都会产生电力。电力用于购买升级，如加高坝体、提升发电效率、开挖排水渠加速排水等。',
+    highlight: 'upgrades'
+  },
+  {
+    title: '降雨与季节',
+    icon: '\u{1F327}\u{FE0F}',
+    text: '天气会自然变化。春秋多雨，夏季干旱偶发暴雨，冬季降雪积累来春融化。点击云朵可人工降雨（需升级气象站）。',
+    highlight: 'season'
+  },
+  {
+    title: 'AI 辅助代理',
+    icon: '\u{1F916}',
+    text: '没时间微调？点击"AI"按钮启用辅助代理！它会自动监控大坝和村庄水位，防止决堤与淹没，干旱时自动补水。代价是发电效率降低50%，仅负责水位管理，不涉及电力操作。',
+    highlight: 'aiButton'
+  },
+  {
+    title: '准备好了吗？',
+    icon: '\u{1F3C6}',
+    text: '保持大坝不溢出，村庄不被淹没，尽可能存活更多天数！按空格键暂停，随时调整策略。祝你好运！',
+    highlight: null
+  }
+];
+
+// ==================== 游戏状态 ====================
+const PHASE = { MENU: 'menu', TUTORIAL: 'tutorial', PLAYING: 'playing', PAUSED: 'paused', GAMEOVER: 'gameover' };
+let gamePhase = PHASE.MENU;
+let tutorialStep = 0;
+
+let state = createGameState();
+
+function createGameState() {
+  const s = {
+    reservoir: CONFIG.initialReservoir,
+    downstream: CONFIG.initialDownstream,
+    power: 0,
+    day: 1, season: 0,
+    dayTime: 0, totalTime: 0,
+    isGameOver: false, gameOverReason: '',
+
+    raining: false,
+    rainDuration: 0,
+    rainTotalAmount: 0,
+    rainAddedSoFar: 0,
+    rainTimer: 0,
+    nextRainTime: 10,
+
+    floodgateOpen: false,
+    drainageOpen: false,
+    inTransitWater: [],
+
+    snowAccumulation: 0,
+    upgrades: {},
+    particles: [],
+    messages: [],
+    forecast: [],
+    score: 0,
+    survivedSeasons: 0,
+    buttons: [],
+    hoveredButton: null,
+    cloudData: [],
+    _prevFlooded: 0,
+
+    // 雨量增强
+    rainBoostCooldownTimer: 0,
+
+    // 排水渠水滴
+    drainageDrops: [],
+    drainageBuffer: 0,
+
+    // AI 辅助
+    aiAssist: false,
+    aiAssistTimer: 0,
+    soundEnabled: true,
+  };
+  UPGRADES.forEach(u => { s.upgrades[u.id] = 0; });
+  return s;
+}
+
+// ==================== Canvas & 输入 ====================
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+let mouse = { x: 0, y: 0, down: false };
+
+function resizeCanvas() {
+  const ratio = canvas.width / canvas.height;
+  const winRatio = window.innerWidth / window.innerHeight;
+  if (winRatio > ratio) {
+    canvas.style.height = '100vh';
+    canvas.style.width = (window.innerHeight * ratio) + 'px';
+  } else {
+    canvas.style.width = '100vw';
+    canvas.style.height = (window.innerWidth / ratio) + 'px';
+  }
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
+  mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
+});
+canvas.addEventListener('mousedown', () => { mouse.down = true; handleClick(); });
+canvas.addEventListener('mouseup', () => { mouse.down = false; });
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  mouse.x = (e.touches[0].clientX - rect.left) * (canvas.width / rect.width);
+  mouse.y = (e.touches[0].clientY - rect.top) * (canvas.height / rect.height);
+  mouse.down = true; handleClick();
+}, { passive: false });
+canvas.addEventListener('touchend', () => { mouse.down = false; });
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'KeyP') {
+    e.preventDefault();
+    if (gamePhase === PHASE.PLAYING) {
+      gamePhase = PHASE.PAUSED;
+    } else if (gamePhase === PHASE.PAUSED) {
+      gamePhase = PHASE.PLAYING;
+    }
+  }
+  if (e.code === 'Escape') {
+    if (gamePhase === PHASE.TUTORIAL) {
+      tutorialStep = TUTORIAL_STEPS.length;
+      gamePhase = PHASE.PLAYING;
+    }
+  }
+});
+
+// ==================== 工具函数 ====================
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+function rand(min, max) { return Math.random() * (max - min) + min; }
+function formatNum(n) {
+  if (n >= 10000) return (n / 10000).toFixed(1) + '\u4e07';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return Math.floor(n).toString();
+}
+
+// ==================== 音效系统 ====================
+let audioCtx = null;
+let soundEnabled = true;
+function getAudioCtx() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) { soundEnabled = false; }
+  }
+  return audioCtx;
+}
+function playTone(freq, duration, type, volume) {
+  if (!soundEnabled) return;
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') ctx.resume();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type || 'sine';
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0, ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(volume || 0.15, ctx.currentTime + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + duration);
+}
+function playSound(name) {
+  if (!soundEnabled) return;
+  switch(name) {
+    case 'floodgate_open':
+      playTone(220, 0.15, 'square', 0.12);
+      setTimeout(() => playTone(330, 0.2, 'square', 0.1), 60);
+      break;
+    case 'floodgate_close':
+      playTone(330, 0.15, 'square', 0.1);
+      setTimeout(() => playTone(180, 0.2, 'square', 0.12), 60);
+      break;
+    case 'drainage_open':
+      playTone(300, 0.12, 'sine', 0.1);
+      setTimeout(() => playTone(400, 0.15, 'sine', 0.08), 50);
+      break;
+    case 'drainage_close':
+      playTone(400, 0.12, 'sine', 0.08);
+      setTimeout(() => playTone(250, 0.15, 'sine', 0.1), 50);
+      break;
+    case 'power':
+      playTone(880, 0.08, 'sine', 0.06);
+      break;
+    case 'upgrade':
+      playTone(523, 0.1, 'sine', 0.12);
+      setTimeout(() => playTone(659, 0.1, 'sine', 0.12), 80);
+      setTimeout(() => playTone(784, 0.15, 'sine', 0.12), 160);
+      break;
+    case 'warning':
+      playTone(440, 0.2, 'sawtooth', 0.1);
+      setTimeout(() => playTone(440, 0.2, 'sawtooth', 0.1), 250);
+      break;
+    case 'gameover':
+      playTone(200, 0.3, 'sawtooth', 0.15);
+      setTimeout(() => playTone(150, 0.4, 'sawtooth', 0.15), 200);
+      setTimeout(() => playTone(100, 0.6, 'sawtooth', 0.15), 500);
+      break;
+    case 'rain':
+      playTone(120 + Math.random() * 40, 0.05, 'sine', 0.03);
+      break;
+    case 'ai_on':
+      playTone(600, 0.1, 'sine', 0.1);
+      setTimeout(() => playTone(800, 0.1, 'sine', 0.1), 80);
+      setTimeout(() => playTone(1000, 0.15, 'sine', 0.1), 160);
+      break;
+    case 'ai_off':
+      playTone(1000, 0.1, 'sine', 0.1);
+      setTimeout(() => playTone(600, 0.15, 'sine', 0.1), 80);
+      break;
+    case 'click':
+      playTone(600, 0.04, 'sine', 0.05);
+      break;
+  }
+}
+
+// ==================== 计算属性 ====================
+function getEffectiveMax() { return CONFIG.reservoirMax + (state.upgrades.damHeight || 0) * 40; }
+function getDownstreamMax() { return CONFIG.downstreamMax + (state.upgrades.embankment || 0) * 25; }
+function getDrainSpeed() { return CONFIG.baseDrainSpeed + (state.upgrades.floodgate || 0) * 3; }
+function getPowerMultiplier() { return CONFIG.basePowerPerWater + (state.upgrades.generator || 0) * 0.4; }
+function getNaturalDrain() { return CONFIG.baseNaturalDrain + (state.upgrades.drainage || 0) * 0.35; }
+function getForecastDays() { return state.upgrades.weatherStation || 0; }
+function getRainBoostLevel() { return state.upgrades.rainBoost || 0; }
+function getRainBoostCost() {
+  const lv = getRainBoostLevel();
+  return Math.max(5, CONFIG.rainBoostBaseCost - lv * 2);
+}
+function getRainBoostAmount() {
+  const lv = getRainBoostLevel();
+  return [CONFIG.rainBoostAmount[0] + lv * 2, CONFIG.rainBoostAmount[1] + lv * 4];
+}
+
+// ==================== 消息系统 ====================
+function addMessage(text, color, duration) {
+  state.messages.push({ text, color, duration: duration || 4, timer: 0, alpha: 1 });
+}
+
+// ==================== 粒子系统 ====================
+function spawnRainDrop() {
+  const damX = 50, damW = 380;
+  state.particles.push({
+    x: rand(damX - 30, damX + damW + 30),
+    y: rand(-20, 50),
+    vy: rand(2.5, 5), vx: rand(-0.3, 0.3),
+    life: rand(1.2, 2.5), maxLife: 0,
+    type: 'raindrop'
+  });
+}
+function spawnRipple(x, y) {
+  state.particles.push({ x, y, life: 1.2, maxLife: 0, type: 'ripple', size: 2 });
+}
+function spawnPowerFloat(x, y, amount) {
+  state.particles.push({
+    x, y, vy: -0.8, life: 1.5, maxLife: 0,
+    type: 'powerfloat', text: '+' + Math.floor(amount), size: 13
+  });
+}
+function spawnSparkle(x, y) {
+  for (let i = 0; i < 8; i++) {
+    state.particles.push({
+      x, y,
+      vx: rand(-1.5, 1.5), vy: rand(-2.5, -0.5),
+      life: rand(0.6, 1.2), maxLife: 0,
+      type: 'sparkle', size: rand(2, 4)
+    });
+  }
+}
+
+// ==================== 河道路径 ====================
+function getRiverPoint(t) {
+  const startX = 440, startY = 280;
+  const endX = 500, endY = 280;
+  const midX = (startX + endX) / 2;
+  const midY = 330 + Math.sin(t * Math.PI * 2) * 15;
+  const inv = 1 - t;
+  return {
+    x: inv * inv * startX + 2 * inv * t * midX + t * t * endX,
+    y: inv * inv * startY + 2 * inv * t * midY + t * t * endY
+  };
+}
+
+// ==================== 排水渠路径 ====================
+function getDrainagePoint(t) {
+  const startX = 50, startY = 290;
+  const endX = -30, endY = 620;
+  const midX = -10, midY = 430;
+  const inv = 1 - t;
+  return {
+    x: inv * inv * startX + 2 * inv * t * midX + t * t * endX,
+    y: inv * inv * startY + 2 * inv * t * midY + t * t * endY
+  };
+}
+
+// ==================== 预报 ====================
+function updateForecast() {
+  if (getForecastDays() <= 0) { state.forecast = []; return; }
+  let tempSeason = state.season, tempDay = state.day;
+  state.forecast = [];
+  for (let i = 0; i < getForecastDays(); i++) {
+    tempDay++;
+    if (tempDay % 30 === 1) tempSeason = (tempSeason + 1) % 4;
+    const s = SEASONS[tempSeason];
+    const isStorm = Math.random() < s.stormChance;
+    let rain = rand(CONFIG.baseRainAmount[0], CONFIG.baseRainAmount[1]) * s.rainMult;
+    if (isStorm) rain *= 2.2;
+    state.forecast.push({ day: tempDay, season: tempSeason, rain: Math.floor(rain), isStorm });
+  }
+}
+
+// ==================== 更新逻辑 ====================
+function update(dt) {
+  // 按钮悬停检测
+  state.hoveredButton = null;
+  for (const btn of state.buttons) {
+    if (mouse.x >= btn.x && mouse.x <= btn.x + btn.w && mouse.y >= btn.y && mouse.y <= btn.y + btn.h) {
+      state.hoveredButton = btn;
+    }
+  }
+
+  if (gamePhase !== PHASE.PLAYING) return;
+
+  const effResMax = getEffectiveMax();
+  const effDownMax = getDownstreamMax();
+
+  state.totalTime += dt;
+  state.dayTime += dt / CONFIG.dayDuration;
+
+  // 雨量增强冷却
+  if (state.rainBoostCooldownTimer > 0) state.rainBoostCooldownTimer -= dt;
+
+  if (state.dayTime >= 1) {
+    state.dayTime = 0;
+    state.day++;
+    state.score += 8;
+    if (state.day % 30 === 1) {
+      state.season = (state.season + 1) % 4;
+      state.survivedSeasons++;
+      const s = SEASONS[state.season];
+      addMessage(`${s.name}\u5b63\u6765\u4e34 \u2014 ${s.desc}`, s.color, 6);
+      if (state.season === 0 && state.snowAccumulation > 0) {
+        const melt = state.snowAccumulation * 0.55;
+        state.reservoir += melt;
+        state.snowAccumulation *= 0.45;
+        addMessage(`\u{2744}\u{FE0F} \u6625\u96ea\u878d\u5316 +${Math.floor(melt)}`, '#74b9ff', 5);
+      }
+    }
+    updateForecast();
+  }
+
+  // 降雨逻辑
+  state.rainTimer += dt;
+  if (state.raining && state.rainDuration > 0) {
+    state.rainDuration -= dt;
+    const portion = (dt / (state.rainDuration + dt)) * (state.rainTotalAmount - state.rainAddedSoFar);
+    const actual = Math.max(0, Math.min(portion, state.rainTotalAmount - state.rainAddedSoFar));
+    state.reservoir += actual;
+    state.rainAddedSoFar += actual;
+
+    const intensity = state.rainTotalAmount > 30 ? 2 : 1;
+    const dropCount = Math.floor(intensity * 3 * dt);
+    for (let i = 0; i < dropCount; i++) spawnRainDrop();
+    if (Math.random() < 0.15 * intensity) {
+      const damX = 50, damW = 380;
+      const waterH = 120 * (state.reservoir / effResMax);
+      spawnRipple(rand(damX + 10, damX + damW - 10), 290 - waterH + rand(-5, 5));
+    }
+    if (Math.random() < 0.08 * intensity * dt * 60) playSound('rain');
+
+    if (state.rainDuration <= 0) {
+      const remainder = state.rainTotalAmount - state.rainAddedSoFar;
+      if (remainder > 0.001) { state.reservoir += remainder; state.rainAddedSoFar = state.rainTotalAmount; }
+      state.raining = false;
+      state.rainAddedSoFar = 0;
+      state.rainTotalAmount = 0;
+    }
+  }
+
+  // 开始新降雨
+  if (!state.raining && state.rainTimer >= state.nextRainTime) {
+    state.rainTimer = 0;
+    const s = SEASONS[state.season];
+    const isStorm = Math.random() < s.stormChance;
+    let rainAmount = rand(CONFIG.baseRainAmount[0], CONFIG.baseRainAmount[1]) * s.rainMult;
+    if (state.season === 3) {
+      state.snowAccumulation += rainAmount * 0.5;
+      addMessage(`\u{2744}\u{FE0F} \u964d\u96ea +${Math.floor(rainAmount * 0.5)} (\u79ef\u96ea)`, '#74b9ff', 4);
+    } else {
+      if (isStorm) {
+        rainAmount *= 2.2;
+        addMessage('\u{26C8}\u{FE0F} \u66b4\u96e8\u6765\u88ad\uff01', '#e17055', 5);
+      } else {
+        addMessage(`\u{1F327}\u{FE0F} \u964d\u96e8\u5f00\u59cb...`, '#64b5f6', 3);
+      }
+      state.raining = true;
+      state.rainDuration = rand(CONFIG.baseRainDuration[0], CONFIG.baseRainDuration[1]);
+      state.rainTotalAmount = rainAmount;
+      state.rainAddedSoFar = 0;
+    }
+    state.nextRainTime = rand(CONFIG.baseRainInterval[0], CONFIG.baseRainInterval[1]) / (s.rainMult || 1);
+    if (isStorm) state.nextRainTime *= 0.6;
+  }
+
+  // 泄洪逻辑
+  if (state.floodgateOpen && state.reservoir > 0) {
+    const drain = getDrainSpeed() * dt;
+    const actualDrain = Math.min(drain, state.reservoir);
+    state.reservoir -= actualDrain;
+    const lastFlow = state.inTransitWater[state.inTransitWater.length - 1];
+    if (lastFlow && lastFlow.progress < 0.015) {
+      lastFlow.amount += actualDrain;
+    } else {
+      state.inTransitWater.push({ amount: actualDrain, progress: 0 });
+    }
+  }
+
+  // 河道水流
+  for (let i = state.inTransitWater.length - 1; i >= 0; i--) {
+    const flow = state.inTransitWater[i];
+    flow.progress += CONFIG.flowSpeed * dt;
+    if (flow.progress >= 1) {
+      state.downstream += flow.amount;
+      const aiPowerMult = state.aiAssist ? 0.5 : 1;
+      const powerGain = flow.amount * getPowerMultiplier() * aiPowerMult;
+      state.power += powerGain;
+      state.score += powerGain * 0.08;
+      const endPt = getRiverPoint(1);
+      spawnPowerFloat(endPt.x, endPt.y - 20, powerGain);
+      if (powerGain >= 1) playSound('power');
+      state.inTransitWater.splice(i, 1);
+    }
+  }
+
+  // 排水渠 - 从大坝缓慢排水
+  if (state.drainageOpen && state.reservoir > 0) {
+    const drain = getNaturalDrain() * dt;
+    const actualDrain = Math.min(drain, state.reservoir);
+    state.reservoir -= actualDrain;
+    state.drainageBuffer += actualDrain;
+    while (state.drainageBuffer >= 0.5) {
+      state.drainageBuffer -= 0.5;
+      state.drainageDrops.push({ progress: 0, amount: 0.5 });
+    }
+  }
+
+  // 排水渠水滴流动 - 水排出到地图外，不进入下游
+  for (let i = state.drainageDrops.length - 1; i >= 0; i--) {
+    const drop = state.drainageDrops[i];
+    drop.progress += CONFIG.flowSpeed * 0.5 * dt;
+    if (drop.progress >= 1) {
+      state.drainageDrops.splice(i, 1);
+    }
+  }
+
+  // 下游自然蒸发/渗透 - 水位缓慢自然下降
+  if (state.downstream > 0) {
+    state.downstream -= CONFIG.baseDownstreamEvap * dt;
+    if (state.downstream < 0) state.downstream = 0;
+  }
+
+  // AI 辅助代理 - 自动管理水位，代价是减少发电量
+  if (state.aiAssist) {
+    state.aiAssistTimer += dt;
+    const resRatio = state.reservoir / effResMax;
+    const downRatio = state.downstream / effDownMax;
+
+    // 大坝危急：水位超过85%，立即开排水渠泄洪（排水到外界，不影响下游）
+    if (resRatio > 0.85 && !state.drainageOpen) {
+      state.drainageOpen = true;
+      addMessage('🤖 AI: 大坝水位危急，自动开启排水渠', '#74b9ff', 2);
+      playSound('drainage_open');
+    }
+    // 大坝安全后关闭排水渠
+    if (resRatio < 0.60 && state.drainageOpen && downRatio < 0.65) {
+      state.drainageOpen = false;
+      addMessage('🤖 AI: 大坝水位已安全，关闭排水渠', '#a0b0c0', 2);
+      playSound('drainage_close');
+    }
+
+    // 下游过高：关闭泄洪闸，开排水渠（排水渠从大坝排走，不进下游）
+    if (downRatio > 0.70 && state.floodgateOpen) {
+      state.floodgateOpen = false;
+      addMessage('🤖 AI: 下游水位过高，关闭泄洪闸', '#f7b731', 2);
+      playSound('floodgate_close');
+    }
+    if (downRatio > 0.70 && !state.drainageOpen && state.reservoir > 0) {
+      state.drainageOpen = true;
+      addMessage('🤖 AI: 下游偏高，开启排水渠分流', '#74b9ff', 2);
+      playSound('drainage_open');
+    }
+
+    // 下游干旱：开泄洪闸补充下游（但前提是大坝有水）
+    if (downRatio < 0.20 && !state.floodgateOpen && state.reservoir > 10) {
+      state.floodgateOpen = true;
+      addMessage('🤖 AI: 下游干旱，开启泄洪补充水源', '#4ecdc4', 2);
+      playSound('floodgate_open');
+    }
+    if (downRatio > 0.40 && state.floodgateOpen && resRatio < 0.85) {
+      state.floodgateOpen = false;
+      addMessage('🤖 AI: 下游水位恢复，关闭泄洪闸', '#a0b0c0', 2);
+      playSound('floodgate_close');
+    }
+  }
+
+  // 村庄发电 - AI辅助开启时发电效率降低50%
+  const downRatioNow = state.downstream / effDownMax;
+  const floodHNow = 140 * downRatioNow;
+  const waterLevelNow = 165 + 140 - floodHNow;
+  const housesData = [
+    { x: 535, y: 222, w: 30, h: 25 }, { x: 580, y: 212, w: 35, h: 30 },
+    { x: 635, y: 228, w: 28, h: 22 }, { x: 685, y: 218, w: 32, h: 28 },
+    { x: 740, y: 232, w: 26, h: 20 }, { x: 785, y: 222, w: 34, h: 26 },
+    { x: 840, y: 228, w: 30, h: 24 }, { x: 885, y: 218, w: 28, h: 22 },
+  ];
+  let floodedCount = 0, activeCount = 0;
+  housesData.forEach(h => {
+    if (h.y + h.h > waterLevelNow) floodedCount++; else activeCount++;
+  });
+  const aiHouseMult = state.aiAssist ? 0.5 : 1;
+  const housePowerGain = activeCount * CONFIG.housePowerRate * dt * aiHouseMult;
+  state.power += housePowerGain;
+  state.score += housePowerGain * 0.05;
+  state._prevFlooded = state._prevFlooded || 0;
+  if (floodedCount > state._prevFlooded && Math.random() < 0.3) {
+    addMessage('\u{1F3E0} \u6751\u5e84\u623f\u5c4b\u88ab\u6df9\uff0c\u53d1\u7535\u4e2d\u65ad\uff01', '#e17055', 3);
+    playSound('warning');
+  }
+  state._prevFlooded = floodedCount;
+
+  // 边界
+  state.reservoir = clamp(state.reservoir, 0, effResMax * 1.05);
+  state.downstream = clamp(state.downstream, 0, effDownMax * 1.05);
+
+  // 失败
+  if (state.reservoir >= effResMax) {
+    gamePhase = PHASE.GAMEOVER;
+    state.gameOverReason = '\u{1F30A} \u5927\u575d\u6e83\u575d\uff01\u50a8\u6c34\u6ea2\u6ee1\uff0c\u6d2a\u6c34\u541e\u566c\u4e86\u4e00\u5207...';
+    playSound('gameover');
+  } else if (state.downstream >= effDownMax) {
+    gamePhase = PHASE.GAMEOVER;
+    state.gameOverReason = '\u{1F30A} \u4e0b\u6e38\u6d2a\u6c34\u6cdb\u6ee9\uff01\u6751\u5e84\u88ab\u5f7b\u5e95\u6df9\u6ca1...';
+    playSound('gameover');
+  }
+
+  // 干旱警告
+  if ((state.downstream / effDownMax) < CONFIG.dryThreshold && Math.random() < 0.008) {
+    addMessage('\u{1F335} \u8b66\u544a\uff1a\u4e0b\u6e38\u4e25\u91cd\u5e72\u65f1\uff01', '#f7b731', 3);
+    playSound('warning');
+  }
+
+  // 粒子更新
+  state.particles.forEach(p => {
+    p.maxLife = p.maxLife || p.life;
+    p.life -= dt;
+    if (p.vx !== undefined) p.x += p.vx;
+    if (p.vy !== undefined) p.y += p.vy;
+    if (p.type === 'raindrop') p.y += p.vy;
+    if (p.type === 'ripple') p.size += 15 * dt;
+  });
+  state.particles = state.particles.filter(p => p.life > 0);
+
+  // 消息更新
+  state.messages.forEach(m => {
+    m.timer += dt;
+    if (m.timer > m.duration - 0.8) m.alpha = Math.max(0, (m.duration - m.timer) / 0.8);
+  });
+  state.messages = state.messages.filter(m => m.timer < m.duration);
+}
+
+// ==================== 点击处理 ====================
+function handleClick() {
+  state.buttons = state.buttons || [];
+
+  // 暂停按钮（游戏中）
+  if (gamePhase === PHASE.PLAYING || gamePhase === PHASE.PAUSED) {
+    const pauseBtn = state.buttons.find(b => b.id === 'pause');
+    if (pauseBtn && mouse.x >= pauseBtn.x && mouse.x <= pauseBtn.x + pauseBtn.w &&
+        mouse.y >= pauseBtn.y && mouse.y <= pauseBtn.y + pauseBtn.h) {
+      gamePhase = gamePhase === PHASE.PAUSED ? PHASE.PLAYING : PHASE.PAUSED;
+      return;
+    }
+  }
+
+  // 音效开关（任何时候可用）
+  const soundBtn = state.buttons.find(b => b.id === 'soundToggle');
+  if (soundBtn && mouse.x >= soundBtn.x && mouse.x <= soundBtn.x + soundBtn.w &&
+      mouse.y >= soundBtn.y && mouse.y <= soundBtn.y + soundBtn.h) {
+    soundEnabled = !soundEnabled;
+    state.soundEnabled = soundEnabled;
+    if (soundEnabled) playSound('click');
+    return;
+  }
+
+  for (const btn of state.buttons) {
+    if (mouse.x >= btn.x && mouse.x <= btn.x + btn.w && mouse.y >= btn.y && mouse.y <= btn.y + btn.h) {
+      // 主菜单按钮
+      if (btn.id === 'btn_start') {
+        gamePhase = PHASE.PLAYING;
+        state = createGameState();
+        updateForecast();
+        playSound('click');
+        return;
+      }
+      if (btn.id === 'btn_tutorial') {
+        gamePhase = PHASE.TUTORIAL;
+        tutorialStep = 0;
+        state = createGameState();
+        playSound('click');
+        return;
+      }
+      // 教程按钮
+      if (btn.id === 'tutorial_next') {
+        playSound('click');
+        tutorialStep++;
+        if (tutorialStep >= TUTORIAL_STEPS.length) {
+          gamePhase = PHASE.PLAYING;
+        }
+        return;
+      }
+      if (btn.id === 'tutorial_skip') {
+        playSound('click');
+        gamePhase = PHASE.PLAYING;
+        return;
+      }
+      // 暂停菜单按钮
+      if (btn.id === 'btn_resume') { playSound('click'); gamePhase = PHASE.PLAYING; return; }
+      if (btn.id === 'btn_restart') {
+        playSound('click');
+        state = createGameState();
+        gamePhase = PHASE.PLAYING;
+        updateForecast();
+        return;
+      }
+      if (btn.id === 'btn_menu') {
+        playSound('click');
+        gamePhase = PHASE.MENU;
+        return;
+      }
+      // 游戏结束按钮
+      if (btn.id === 'gameover_restart') {
+        playSound('click');
+        state = createGameState();
+        gamePhase = PHASE.PLAYING;
+        updateForecast();
+        return;
+      }
+      if (btn.id === 'gameover_menu') {
+        playSound('click');
+        gamePhase = PHASE.MENU;
+        return;
+      }
+      // 游戏内按钮
+      if (gamePhase !== PHASE.PLAYING) return;
+      if (btn.id === 'floodgate') {
+        state.floodgateOpen = !state.floodgateOpen;
+        addMessage(state.floodgateOpen ? '\u{1F6A6} \u95f8\u95e8\u5f00\u542f' : '\u{1F6A7} \u95f8\u95e8\u5173\u95ed',
+          state.floodgateOpen ? '#4ecdc4' : '#74b9ff', 1.5);
+        playSound(state.floodgateOpen ? 'floodgate_open' : 'floodgate_close');
+      } else if (btn.id === 'drainage') {
+        state.drainageOpen = !state.drainageOpen;
+        addMessage(state.drainageOpen ? '\u{1F6E3} \u6392\u6c34\u6e20\u5f00\u542f' : '\u{1F6E3} \u6392\u6c34\u6e20\u5173\u95ed',
+          state.drainageOpen ? '#74b9ff' : '#a0b0c0', 1.5);
+        playSound(state.drainageOpen ? 'drainage_open' : 'drainage_close');
+      } else if (btn.id === 'aiAssist') {
+        state.aiAssist = !state.aiAssist;
+        if (state.aiAssist) {
+          addMessage('\u{1F916} AI\u8f85\u52a9\u5df2\u5f00\u542f \u2014 \u81ea\u52a8\u7ba1\u7406\u6c34\u4f4d\uff0c\u53d1\u7535\u6548\u7387\u964d\u4f4e50%', '#2dd4a8', 4);
+          playSound('ai_on');
+        } else {
+          addMessage('\u{1F916} AI\u8f85\u52a9\u5df2\u5173\u95ed \u2014 \u6062\u590d\u624b\u52a8\u63a7\u5236', '#a0b0c0', 3);
+          playSound('ai_off');
+        }
+      } else if (btn.id === 'rainBoost') {
+        const lv = getRainBoostLevel();
+        if (lv <= 0) {
+          addMessage('\u9700\u5148\u5347\u7ea7\u201c\u96e8\u4e91\u53ec\u5524\u5668\u201d', '#5a6a7a', 2);
+        } else if (state.rainBoostCooldownTimer > 0) {
+          addMessage(`\u51b7\u5374\u4e2d... ${state.rainBoostCooldownTimer.toFixed(1)}\u79d2`, '#a0b0c0', 1.5);
+        } else {
+          const cost = getRainBoostCost();
+          if (state.power >= cost) {
+            state.power -= cost;
+            const amt = rand(getRainBoostAmount()[0], getRainBoostAmount()[1]);
+            state.reservoir += amt;
+            state.rainBoostCooldownTimer = CONFIG.rainBoostCooldown;
+            addMessage(`\u{2601}\u{FE0F} \u96e8\u4e91\u53ec\u5524\uff01+${Math.floor(amt)} \u6c34\u91cf \u6d88\u8017${cost}\u{26A1}`, '#4ecdc4', 4);
+            spawnSparkle(230, 200);
+            for (let i = 0; i < 10; i++) spawnRainDrop();
+            playSound('upgrade');
+          } else {
+            addMessage(`\u7535\u529b\u4e0d\u8db3\uff01\u9700\u8981${cost}\u{26A1}`, '#e17055', 2);
+          }
+        }
+      } else if (btn.id.startsWith('upgrade_')) {
+        const upId = btn.id.replace('upgrade_', '');
+        const upgrade = UPGRADES.find(u => u.id === upId);
+        const level = state.upgrades[upId] || 0;
+        if (level < upgrade.maxLevel) {
+          const cost = upgrade.cost(level);
+          if (state.power >= cost) {
+            state.power -= cost;
+            state.upgrades[upId] = level + 1;
+            addMessage(`${upgrade.icon} ${upgrade.name} \u5347\u7ea7\u5230 Lv.${level + 1}\uff01`, '#f7b731', 3);
+            spawnSparkle(btn.x + btn.w / 2, btn.y + btn.h / 2);
+            playSound('upgrade');
+          } else {
+            addMessage('\u7535\u529b\u4e0d\u8db3\uff01', '#e17055', 1.5);
+          }
+        }
+      }
+      break;
+    }
+  }
+
+  // 人工降雨：点击云朵
+  if (gamePhase === PHASE.PLAYING && getForecastDays() > 0) {
+    for (const cloud of state.cloudData) {
+      const dx = mouse.x - cloud.cx, dy = mouse.y - cloud.cy;
+      if (dx * dx + dy * dy < cloud.r * cloud.r) {
+        if (state.power >= CONFIG.cloudSeedCost && !state.raining) {
+          state.power -= CONFIG.cloudSeedCost;
+          const s = SEASONS[state.season];
+          const rainAmount = rand(8, 16) * s.rainMult;
+          state.raining = true;
+          state.rainDuration = rand(3, 5);
+          state.rainTotalAmount = rainAmount;
+          state.rainAddedSoFar = 0;
+          addMessage('\u{2601}\u{FE0F} \u4eba\u5de5\u964d\u96e8\u6210\u529f\uff01\u6d88\u8017' + CONFIG.cloudSeedCost + '\u{26A1}', '#4ecdc4', 4);
+          spawnSparkle(cloud.cx, cloud.cy);
+          playSound('upgrade');
+        } else if (state.raining) {
+          addMessage('\u6b63\u5728\u4e0b\u96e8\uff0c\u65e0\u9700\u4eba\u5de5\u5e72\u9884', '#a0b0c0', 2);
+        } else {
+          addMessage('\u7535\u529b\u4e0d\u8db3\uff01\u9700\u8981' + CONFIG.cloudSeedCost + '\u{26A1}', '#e17055', 2);
+        }
+        break;
+      }
+    }
+  }
+}
+
+// ==================== 绘制函数 ====================
+function drawRoundedRect(ctx, x, y, w, h, r, fill, stroke) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke(); }
+}
+
+function drawBar(ctx, x, y, w, h, value, max, color, bgColor, label, warning, danger) {
+  const ratio = clamp(value / max, 0, 1);
+  const barW = w * ratio;
+  drawRoundedRect(ctx, x, y, w, h, h / 2, bgColor);
+  let fillColor = color;
+  if (danger !== undefined && ratio >= danger) fillColor = '#e74c3c';
+  else if (warning !== undefined && ratio >= warning) fillColor = '#f39c12';
+  if (barW > 0) {
+    ctx.save();
+    ctx.beginPath();
+    drawRoundedRect(ctx, x, y, w, h, h / 2, null, null);
+    ctx.clip();
+    ctx.fillStyle = fillColor;
+    ctx.fillRect(x, y, barW, h);
+    ctx.restore();
+  }
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${h * 0.5}px "Segoe UI", sans-serif`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(label, x + 10, y + h / 2);
+  ctx.textAlign = 'right';
+  ctx.fillText(`${Math.floor(value)}/${Math.floor(max)}`, x + w - 10, y + h / 2);
+}
+
+function drawButton(ctx, x, y, w, h, text, icon, isActive, isDisabled, isHovered) {
+  let bg, textColor;
+  if (isDisabled) { bg = '#2a3a4a'; textColor = '#5a6a7a'; }
+  else if (isActive) { bg = isHovered ? '#1e88c4' : '#1565a8'; textColor = '#fff'; }
+  else if (isHovered) { bg = '#2a4a6a'; textColor = '#e0eaf2'; }
+  else { bg = '#1a2a3a'; textColor = '#a0b0c0'; }
+  drawRoundedRect(ctx, x, y, w, h, 6, bg);
+  if (isHovered && !isDisabled) {
+    ctx.strokeStyle = '#3a8bc4'; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+  ctx.fillStyle = textColor;
+  ctx.font = `bold ${h * 0.38}px "Segoe UI", sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText((icon || '') + ' ' + text, x + w / 2, y + h / 2);
+  return { x, y, w, h };
+}
+
+// ==================== 主绘制分发 ====================
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  state.buttons = [];
+
+  if (gamePhase === PHASE.MENU) {
+    drawMenu();
+  } else if (gamePhase === PHASE.TUTORIAL) {
+    drawGame();
+    drawTutorialOverlay();
+  } else if (gamePhase === PHASE.PLAYING || gamePhase === PHASE.PAUSED || gamePhase === PHASE.GAMEOVER) {
+    drawGame();
+    if (gamePhase === PHASE.PAUSED) drawPauseOverlay();
+    if (gamePhase === PHASE.GAMEOVER) drawGameOverOverlay();
+  }
+}
+
+// ==================== 主菜单 ====================
+function drawMenu() {
+  // 背景渐变
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, '#0a1520');
+  grad.addColorStop(0.5, '#0d1f2e');
+  grad.addColorStop(1, '#0a1520');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // 装饰水波纹
+  ctx.strokeStyle = 'rgba(30, 136, 196, 0.08)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 5; i++) {
+    ctx.beginPath();
+    const y = 300 + i * 60;
+    for (let x = 0; x < canvas.width; x += 10) {
+      const wave = Math.sin(x * 0.02 + state.totalTime * 0.5 + i) * 8;
+      if (x === 0) ctx.moveTo(x, y + wave); else ctx.lineTo(x, y + wave);
+    }
+    ctx.stroke();
+  }
+
+  // 标题
+  ctx.fillStyle = '#e0eaf2';
+  ctx.font = 'bold 52px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('\u{1F3D7} \u5927\u575d\uff1a\u6d2a\u6c34\u4e0e\u7535\u529b', 480, 220);
+
+  ctx.fillStyle = '#7a8a9a';
+  ctx.font = '18px "Segoe UI", sans-serif';
+  ctx.fillText('\u7ba1\u7406\u6c34\u4f4d \u00b7 \u4fdd\u62a4\u6751\u5e84 \u00b7 \u53d1\u5c55\u7535\u529b \u00b7 AI\u8f85\u52a9', 480, 270);
+
+  // 按钮
+  const btnY = 360;
+  const startHovered = mouse.x >= 340 && mouse.x <= 620 && mouse.y >= btnY && mouse.y <= btnY + 55;
+  const tutHovered = mouse.x >= 340 && mouse.x <= 620 && mouse.y >= btnY + 70 && mouse.y <= btnY + 125;
+
+  const startBtn = drawButton(ctx, 340, btnY, 280, 55, '\u5f00\u59cb\u6e38\u620f', '\u{25B6}', false, false, startHovered);
+  state.buttons.push({ id: 'btn_start', ...startBtn });
+
+  const tutBtn = drawButton(ctx, 340, btnY + 70, 280, 55, '\u65b0\u624b\u6307\u5f15', '\u{1F4D6}', false, false, tutHovered);
+  state.buttons.push({ id: 'btn_tutorial', ...tutBtn });
+
+  // 底部提示
+  ctx.fillStyle = 'rgba(120, 140, 160, 0.4)';
+  ctx.font = '13px "Segoe UI", sans-serif';
+  ctx.fillText('\u7a7a\u683c\u952e\u6682\u505c \u00b7 \u70b9\u51fb\u4e91\u6735\u964d\u96e8 \u00b7 \u{1F916}AI\u8f85\u52a9\u81ea\u52a8\u7ba1\u7406\u6c34\u4f4d', 480, 560);
+}
+
+// ==================== 新手指引覆盖层 ====================
+function drawTutorialOverlay() {
+  const step = TUTORIAL_STEPS[tutorialStep];
+  if (!step) return;
+
+  // 计算高亮区域
+  let hx = 0, hy = 0, hw = 0, hh = 0;
+  if (step.highlight) {
+    switch (step.highlight) {
+      case 'dam': hx = 10; hy = 60; hw = 460; hh = 280; break;
+      case 'village': hx = 490; hy = 60; hw = 460; hh = 280; break;
+      case 'floodgate': hx = 100; hy = 300; hw = 200; hh = 55; break;
+      case 'drainage': hx = 280; hy = 300; hw = 100; hh = 55; break;
+      case 'aiButton': hx = 375; hy = 300; hw = 90; hh = 55; break;
+      case 'upgrades': hx = 490; hy = 350; hw = 460; hh = 280; break;
+      case 'season': hx = 10; hy = 10; hw = 940; hh = 40; break;
+    }
+  }
+
+  // 半透明遮罩，用 destination-out 挖洞展示高亮区域
+  ctx.save();
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.62)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (hw > 0) {
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = 'rgba(0, 0, 0, 1)';
+    ctx.fillRect(hx - 4, hy - 4, hw + 8, hh + 8);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  ctx.restore();
+
+  // 高亮区域边框 + 光晕
+  if (hw > 0) {
+    ctx.fillStyle = 'rgba(78, 205, 196, 0.06)';
+    drawRoundedRect(ctx, hx - 4, hy - 4, hw + 8, hh + 8, 12, 'rgba(78, 205, 196, 0.06)');
+    ctx.strokeStyle = '#4ecdc4';
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([]);
+    drawRoundedRect(ctx, hx - 4, hy - 4, hw + 8, hh + 8, 12, null, '#4ecdc4');
+    // 指示箭头
+    const arrowX = hx + hw / 2;
+    const arrowY = hy - 16;
+    ctx.fillStyle = '#4ecdc4';
+    ctx.beginPath();
+    ctx.moveTo(arrowX - 8, arrowY - 6);
+    ctx.lineTo(arrowX + 8, arrowY - 6);
+    ctx.lineTo(arrowX, arrowY + 6);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // 对话框
+  const dx = 140, dy = 430, dw = 680, dh = 180;
+  ctx.fillStyle = 'rgba(15, 25, 40, 0.97)';
+  drawRoundedRect(ctx, dx, dy, dw, dh, 14, 'rgba(15, 25, 40, 0.97)');
+  ctx.strokeStyle = '#3a8bc4'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  // 顶部装饰条
+  ctx.fillStyle = '#4ecdc4';
+  drawRoundedRect(ctx, dx, dy, dw, 4, 0, '#4ecdc4');
+
+  // 标题
+  ctx.fillStyle = '#4ecdc4';
+  ctx.font = 'bold 19px "Segoe UI", sans-serif';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(`${step.icon || ''} ${step.title}`, dx + 24, dy + 18);
+
+  // 步骤指示器
+  ctx.fillStyle = 'rgba(160, 180, 200, 0.6)';
+  ctx.font = '13px "Segoe UI", sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(`${tutorialStep + 1} / ${TUTORIAL_STEPS.length}`, dx + dw - 24, dy + 20);
+
+  // 内容
+  ctx.fillStyle = '#c0d0e0';
+  ctx.font = '15px "Segoe UI", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  const maxW = dw - 48;
+  const words = step.text;
+  const lines = [];
+  let line = '';
+  for (let i = 0; i < words.length; i++) {
+    const test = line + words[i];
+    if (ctx.measureText(test).width > maxW && line) {
+      lines.push(line);
+      line = words[i];
+    } else {
+      line = test;
+    }
+  }
+  if (line) lines.push(line);
+  lines.forEach((l, i) => {
+    ctx.fillText(l, dx + 24, dy + 52 + i * 24);
+  });
+
+  // 按钮
+  const isLast = tutorialStep >= TUTORIAL_STEPS.length - 1;
+  const btnW = 160, btnH = 44, btnGap = 16;
+  const btnStartY = dy + dh - btnH - 16;
+
+  // 跳过
+  const skipX = dx + 16;
+  const skipHovered = mouse.x >= skipX && mouse.x <= skipX + 100 && mouse.y >= btnStartY && mouse.y <= btnStartY + btnH;
+  const skipBtn = drawButton(ctx, skipX, btnStartY, 100, btnH, '跳过教程', '', false, false, skipHovered);
+  state.buttons.push({ id: 'tutorial_skip', ...skipBtn });
+
+  // 下一步
+  const nextX = dx + dw - btnW - 16;
+  const nextText = isLast ? '开始游戏 ▶' : '下一步 →';
+  const nextHovered = mouse.x >= nextX && mouse.x <= nextX + btnW && mouse.y >= btnStartY && mouse.y <= btnStartY + btnH;
+  const nextBtn = drawButton(ctx, nextX, btnStartY, btnW, btnH, nextText, '', isLast, false, nextHovered);
+  state.buttons.push({ id: 'tutorial_next', ...nextBtn });
+
+  // 点指示器
+  const dotsY = btnStartY + btnH / 2;
+  const dotsStartX = skipX + 100 + btnGap;
+  const dotsEndX = nextX - btnGap;
+  const dotsW = dotsEndX - dotsStartX;
+  const dotCount = TUTORIAL_STEPS.length;
+  const dotR = 5;
+  const dotSpacing = dotsW / (dotCount - 1);
+  for (let i = 0; i < dotCount; i++) {
+    const dtx = dotsStartX + i * dotSpacing;
+    ctx.fillStyle = i === tutorialStep ? '#4ecdc4' : 'rgba(100, 120, 140, 0.35)';
+    ctx.beginPath();
+    ctx.arc(dtx, dotsY, dotR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// ==================== 游戏主绘制 ====================
+function drawGame() {
+  const effResMax = getEffectiveMax();
+  const effDownMax = getDownstreamMax();
+  const resRatio = state.reservoir / effResMax;
+  const downRatio = state.downstream / effDownMax;
+  const season = SEASONS[state.season];
+
+  // 天空背景
+  let skyAlpha = state.raining ? 0.15 : 0.05;
+  if (state.raining && state.rainTotalAmount > 30) skyAlpha = 0.25;
+  ctx.fillStyle = `rgba(30, 60, 90, ${skyAlpha})`;
+  ctx.fillRect(0, 0, canvas.width, 60);
+
+  // 云朵
+  const cloudOffset = Math.sin(state.totalTime * 0.1) * 30;
+  state.cloudData = [];
+  const canSeed = getForecastDays() > 0;
+  const cloudPositions = [
+    { cx: 120, cy: 35, r: 28 }, { cx: 340, cy: 35, r: 28 },
+    { cx: 560, cy: 35, r: 28 }, { cx: 780, cy: 35, r: 28 },
+  ];
+  cloudPositions.forEach(({ cx: baseCx, cy: baseCy, r }, i) => {
+    const cx = baseCx + cloudOffset;
+    const cy = baseCy + Math.sin(state.totalTime * 0.15 + i) * 5;
+    state.cloudData.push({ cx, cy, r: 32 });
+    let cloudAlpha = state.raining ? 0.08 : 0.12;
+    const isCloudHovered = canSeed && mouse.x >= cx - r && mouse.x <= cx + r &&
+      mouse.y >= cy - r && mouse.y <= cy + r;
+    if (isCloudHovered && canSeed) {
+      cloudAlpha = 0.25;
+      ctx.fillStyle = 'rgba(100, 200, 240, 0.15)';
+      ctx.beginPath(); ctx.arc(cx, cy, r + 10, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = `rgba(255, 255, 255, ${cloudAlpha})`;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 18, 0, Math.PI * 2);
+    ctx.arc(cx + 15, cy - 3, 22, 0, Math.PI * 2);
+    ctx.arc(cx + 32, cy, 16, 0, Math.PI * 2);
+    ctx.fill();
+    if (isCloudHovered && canSeed && !state.raining && state.power >= CONFIG.cloudSeedCost) {
+      ctx.fillStyle = 'rgba(78, 205, 196, 0.9)';
+      ctx.font = 'bold 12px "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`\u{2601} \u70b9\u51fb\u4eba\u5de5\u964d\u96e8 -${CONFIG.cloudSeedCost}\u{26A1}`, cx, cy - 30);
+    }
+  });
+
+  // 顶部信息栏
+  drawRoundedRect(ctx, 10, 10, 940, 40, 8, 'rgba(20, 35, 50, 0.92)');
+  ctx.fillStyle = '#a0b0c0';
+  ctx.font = '14px "Segoe UI", sans-serif';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(`\u{1F4C5} \u7b2c ${state.day} \u5929 \u00b7 ${season.name}\u5b63`, 25, 30);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = season.color;
+  ctx.font = 'bold 14px "Segoe UI", sans-serif';
+  ctx.fillText(season.desc, 460, 30);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#f7b731';
+  ctx.font = 'bold 16px "Segoe UI", sans-serif';
+  ctx.fillText(`\u{26A1} ${formatNum(state.power)}`, 840, 30);
+
+  // 音效开关
+  const soundHovered = state.hoveredButton && state.hoveredButton.id === 'soundToggle';
+  const soundBg = soundHovered ? '#2a4a6a' : '#1a2a3a';
+  drawRoundedRect(ctx, 850, 14, 38, 32, 6, soundBg);
+  if (soundHovered) { ctx.strokeStyle = '#3a8bc4'; ctx.lineWidth = 1.5; ctx.stroke(); }
+  ctx.fillStyle = soundEnabled ? '#4ecdc4' : '#5a6a7a';
+  ctx.font = 'bold 15px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(soundEnabled ? '\u{1F50A}' : '\u{1F507}', 869, 30);
+  state.buttons.push({ id: 'soundToggle', x: 850, y: 14, w: 38, h: 32 });
+
+  // 暂停按钮
+  const pauseHovered = state.hoveredButton && state.hoveredButton.id === 'pause';
+  const pauseBg = gamePhase === PHASE.PAUSED ? '#e17055' : (pauseHovered ? '#2a4a6a' : '#1a2a3a');
+  const pauseFg = gamePhase === PHASE.PAUSED ? '#fff' : (pauseHovered ? '#e0eaf2' : '#a0b0c0');
+  drawRoundedRect(ctx, 896, 14, 42, 32, 6, pauseBg);
+  if (pauseHovered) { ctx.strokeStyle = '#3a8bc4'; ctx.lineWidth = 1.5; ctx.stroke(); }
+  ctx.fillStyle = pauseFg;
+  ctx.font = 'bold 16px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(gamePhase === PHASE.PAUSED ? '\u25B6' : '\u23F8', 917, 30);
+  state.buttons.push({ id: 'pause', x: 896, y: 14, w: 42, h: 32 });
+
+  // 上游大坝区域
+  drawRoundedRect(ctx, 10, 60, 460, 280, 10, 'rgba(15, 30, 45, 0.88)');
+  // AI 监控指示器 - 大坝
+  if (state.aiAssist) {
+    const pulse = 0.3 + Math.sin(state.totalTime * 3) * 0.2;
+    ctx.strokeStyle = `rgba(45, 212, 168, ${pulse})`;
+    ctx.lineWidth = 2;
+    drawRoundedRect(ctx, 10, 60, 460, 280, 10, null, `rgba(45, 212, 168, ${pulse})`);
+    ctx.fillStyle = `rgba(45, 212, 168, ${0.6 + pulse * 0.3})`;
+    ctx.font = 'bold 10px "Segoe UI", sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('\u{1F916} AI\u76d1\u63a7\u4e2d', 460, 74);
+  }
+  ctx.fillStyle = '#e0eaf2';
+  ctx.font = 'bold 18px "Segoe UI", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('\u{1F3D7} \u4e0a\u6e38\u5927\u575d', 30, 88);
+
+  drawBar(ctx, 30, 100, 420, 28, state.reservoir, effResMax,
+    '#1e88c4', '#0d2130', '\u{1F4A7} \u50a8\u6c34\u91cf',
+    CONFIG.floodWarningThreshold, 1.0);
+
+  ctx.font = '13px "Segoe UI", sans-serif';
+  if (resRatio >= 1.0) { ctx.fillStyle = '#e74c3c'; ctx.fillText('\u{1F6A8} \u5371\u9669\uff01\u5373\u5c06\u6e83\u575d\uff01', 30, 145); }
+  else if (resRatio >= CONFIG.floodWarningThreshold) { ctx.fillStyle = '#f39c12'; ctx.fillText('\u{26A0}\u{FE0F} \u8b66\u6212\u6c34\u4f4d\uff0c\u5efa\u8bae\u6cc4\u6d2a', 30, 145); }
+  else if (resRatio >= 0.55) { ctx.fillStyle = '#4ecdc4'; ctx.fillText('\u{2705} \u6c34\u4f4d\u6b63\u5e38', 30, 145); }
+  else { ctx.fillStyle = '#74b9ff'; ctx.fillText('\u{2705} \u6c34\u4f4d\u504f\u4f4e\uff0c\u53ef\u591a\u84c4\u6c34', 30, 145); }
+
+  // 大坝视觉
+  const damX = 50, damY = 175, damW = 380, damH = 110;
+  if (state.raining) {
+    const cloudAlpha = Math.min(state.rainTotalAmount / 40, 0.4);
+    ctx.fillStyle = `rgba(80, 100, 130, ${cloudAlpha})`;
+    ctx.beginPath();
+    ctx.ellipse(damX + damW / 2, damY - 15, damW * 0.55, 20, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const waterH = damH * resRatio;
+  const waterTop = damY + damH - waterH;
+  // 水体渐变填充
+  if (waterH > 0) {
+    const waterGrad = ctx.createLinearGradient(0, waterTop, 0, damY + damH);
+    if (resRatio >= CONFIG.floodWarningThreshold) {
+      waterGrad.addColorStop(0, 'rgba(231, 76, 60, 0.45)');
+      waterGrad.addColorStop(1, 'rgba(180, 40, 30, 0.55)');
+    } else {
+      waterGrad.addColorStop(0, 'rgba(30, 136, 196, 0.4)');
+      waterGrad.addColorStop(1, 'rgba(10, 60, 110, 0.5)');
+    }
+    ctx.fillStyle = waterGrad;
+    ctx.fillRect(damX, waterTop, damW, waterH);
+  }
+  // 水面波纹（始终显示）
+  if (waterH > 3) {
+    ctx.strokeStyle = resRatio >= CONFIG.floodWarningThreshold ? 'rgba(255, 120, 100, 0.5)' : 'rgba(120, 200, 255, 0.4)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i <= damW; i += 4) {
+      const wave = Math.sin(i * 0.04 + state.totalTime * 2) * 2.5 + Math.sin(i * 0.08 + state.totalTime * 1.3) * 1.5;
+      if (i === 0) ctx.moveTo(damX + i, waterTop + wave);
+      else ctx.lineTo(damX + i, waterTop + wave);
+    }
+    ctx.stroke();
+    // 水面高光
+    ctx.strokeStyle = 'rgba(200, 230, 255, 0.15)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i <= damW; i += 6) {
+      const wave = Math.sin(i * 0.06 + state.totalTime * 2.5) * 1.5;
+      if (i === 0) ctx.moveTo(damX + i, waterTop + 3 + wave);
+      else ctx.lineTo(damX + i, waterTop + 3 + wave);
+    }
+    ctx.stroke();
+  }
+  // 大坝结构线
+  ctx.strokeStyle = '#6a7a8a'; ctx.lineWidth = 2.5;
+  ctx.strokeRect(damX, damY, damW, damH);
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+  for (let i = 1; i <= 4; i++) {
+    const ly = damY + damH * (i / 5);
+    ctx.beginPath(); ctx.moveTo(damX, ly); ctx.lineTo(damX + damW, ly); ctx.stroke();
+  }
+  // 大坝右侧坝体加厚效果
+  ctx.fillStyle = 'rgba(60, 70, 85, 0.6)';
+  ctx.fillRect(damX + damW - 8, damY, 8, damH);
+  ctx.fillStyle = '#fff';
+  ctx.font = '11px "Segoe UI", sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(`${Math.floor(resRatio * 100)}%`, damX - 6, waterTop + 4);
+
+  // 泄洪口
+  const gateX = damX + damW - 5, gateY = damY + damH / 2;
+  ctx.fillStyle = state.floodgateOpen ? '#1e88c4' : '#5a6a7a';
+  ctx.beginPath(); ctx.arc(gateX, gateY, 10, 0, Math.PI * 2); ctx.fill();
+  if (state.floodgateOpen) { ctx.strokeStyle = '#64b5f6'; ctx.lineWidth = 2; ctx.stroke(); }
+
+  // 泄洪按钮
+  const btnRect = drawButton(ctx, 120, 310, 170, 42,
+    state.floodgateOpen ? '\u5173\u95ed\u95f8\u95e8' : '\u5f00\u95f8\u6cc4\u6d2a',
+    state.floodgateOpen ? '\u{1F6A7}' : '\u{1F6A6}',
+    state.floodgateOpen, false,
+    state.hoveredButton && state.hoveredButton.id === 'floodgate');
+  state.buttons.push({ id: 'floodgate', ...btnRect });
+
+  // 排水渠按钮
+  const drainBtnRect = drawButton(ctx, 300, 310, 70, 42,
+    state.drainageOpen ? '\u5173\u95ed' : '\u6392\u6c34',
+    '\u{1F6E3}',
+    state.drainageOpen, false,
+    state.hoveredButton && state.hoveredButton.id === 'drainage');
+  state.buttons.push({ id: 'drainage', ...drainBtnRect });
+
+  // AI 辅助按钮
+  const aiHovered = state.hoveredButton && state.hoveredButton.id === 'aiAssist';
+  let aiBg, aiFg;
+  if (state.aiAssist) { aiBg = aiHovered ? '#2dd4a8' : '#1a8a6a'; aiFg = '#fff'; }
+  else if (aiHovered) { aiBg = '#2a4a6a'; aiFg = '#e0eaf2'; }
+  else { aiBg = '#1a2a3a'; aiFg = '#a0b0c0'; }
+  drawRoundedRect(ctx, 380, 310, 80, 42, 6, aiBg);
+  if (aiHovered) { ctx.strokeStyle = state.aiAssist ? '#2dd4a8' : '#3a8bc4'; ctx.lineWidth = 1.5; ctx.stroke(); }
+  ctx.fillStyle = aiFg;
+  ctx.font = 'bold 13px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('\u{1F916} ' + (state.aiAssist ? 'AI\u5f00' : 'AI'), 420, 331);
+  state.buttons.push({ id: 'aiAssist', x: 380, y: 310, w: 80, h: 42 });
+
+  // 雨量增强按钮
+  const rbLv = getRainBoostLevel();
+  const rbCost = getRainBoostCost();
+  const rbReady = rbLv > 0 && state.rainBoostCooldownTimer <= 0;
+  const rbHovered = state.hoveredButton && state.hoveredButton.id === 'rainBoost';
+  const rbText = rbLv <= 0 ? '\u672a\u89e3\u9501' : (state.rainBoostCooldownTimer > 0 ? `${state.rainBoostCooldownTimer.toFixed(1)}s` : `\u53ec\u96e8 -${rbCost}\u{26A1}`);
+  const rbBtnRect = drawButton(ctx, 30, 310, 80, 42, rbText, '\u{2601}\u{FE0F}',
+    rbReady && rbHovered, rbLv <= 0, rbHovered);
+  state.buttons.push({ id: 'rainBoost', ...rbBtnRect });
+
+  // 发电信息
+  ctx.fillStyle = '#f7b731';
+  ctx.font = '12px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  if (state.floodgateOpen) {
+    ctx.fillText(`\u5927\u575d\u6392\u6c34: ${getDrainSpeed().toFixed(1)}/s \u00b7 \u6c34\u6d41\u6d41\u5411\u6751\u5e84...`, 230, 360);
+  }
+  const activeHouses = CONFIG.houseCount - (state._prevFlooded || 0);
+  const housePowerMult = state.aiAssist ? 0.5 : 1;
+  const housePower = activeHouses * CONFIG.housePowerRate * housePowerMult;
+  ctx.fillStyle = activeHouses > 0 ? 'rgba(255, 224, 130, 0.8)' : 'rgba(100, 100, 100, 0.5)';
+  ctx.font = '11px "Segoe UI", sans-serif';
+  ctx.fillText(`\u6751\u5e84\u623f\u5c4b\u53d1\u7535: +${housePower.toFixed(1)}\u{26A1}/s (${activeHouses}\u680b\u8fd0\u4f5c${state.aiAssist ? ' \u00d7AI 50%' : ''})`, 230, 378);
+
+  if (state.snowAccumulation > 0) {
+    ctx.fillStyle = '#74b9ff';
+    ctx.font = '12px "Segoe UI", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(`\u{2744}\u{FE0F} \u5c71\u533a\u79ef\u96ea: ${Math.floor(state.snowAccumulation)}`, 30, 365);
+  }
+
+  // 河道区域
+  drawRiver();
+
+  // 下游村庄区域
+  drawRoundedRect(ctx, 490, 60, 460, 280, 10, 'rgba(15, 30, 45, 0.88)');
+  // AI 监控指示器 - 村庄
+  if (state.aiAssist) {
+    const pulse = 0.3 + Math.sin(state.totalTime * 3 + 1) * 0.2;
+    drawRoundedRect(ctx, 490, 60, 460, 280, 10, null, `rgba(45, 212, 168, ${pulse})`);
+    ctx.fillStyle = `rgba(45, 212, 168, ${0.6 + pulse * 0.3})`;
+    ctx.font = 'bold 10px "Segoe UI", sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('\u{1F916} AI\u76d1\u63a7\u4e2d', 940, 74);
+  }
+  ctx.fillStyle = '#e0eaf2';
+  ctx.font = 'bold 18px "Segoe UI", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('\u{1F3E0} \u4e0b\u6e38\u6751\u5e84', 510, 88);
+
+  let downColor = '#2dd4a8';
+  if (downRatio >= 0.85) downColor = '#e74c3c';
+  else if (downRatio >= CONFIG.highWaterThreshold) downColor = '#f39c12';
+  else if (downRatio < CONFIG.dryThreshold) downColor = '#d4a574';
+
+  drawBar(ctx, 510, 100, 420, 28, state.downstream, effDownMax,
+    downColor, '#0d2130', '\u{1F30A} \u4e0b\u6e38\u6c34\u4f4d',
+    CONFIG.highWaterThreshold, 0.85);
+
+  ctx.font = '13px "Segoe UI", sans-serif';
+  if (downRatio >= 0.85) { ctx.fillStyle = '#e74c3c'; ctx.fillText('\u{1F6A8} \u6d2a\u6c34\u5371\u9669\uff01\u6751\u5e84\u5373\u5c06\u88ab\u6df9\uff01', 510, 145); }
+  else if (downRatio >= CONFIG.highWaterThreshold) { ctx.fillStyle = '#f39c12'; ctx.fillText('\u{26A0}\u{FE0F} \u6c34\u4f4d\u504f\u9ad8\uff0c\u4f4e\u6d3c\u5730\u5e26\u53d7\u5f71\u54cd', 510, 145); }
+  else if (downRatio < CONFIG.dryThreshold) { ctx.fillStyle = '#d4a574'; ctx.fillText('\u{1F335} \u5e72\u65f1\uff01\u519c\u7530\u4e0e\u6c34\u6e90\u544a\u6025', 510, 145); }
+  else { ctx.fillStyle = '#2dd4a8'; ctx.fillText('\u{2705} \u6c34\u91cf\u9002\u5b9c\uff0c\u6751\u5e84\u5b89\u5b81', 510, 145); }
+
+  drawVillage();
+
+  ctx.fillStyle = state.drainageOpen ? '#74b9ff' : '#5a6a7a';
+  ctx.font = '12px "Segoe UI", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(`\u{1F6E3} \u5927\u575d\u6392\u6c34\u6e20: ${state.drainageOpen ? '\u6392\u653e\u4e2d ' + getNaturalDrain().toFixed(2) + '/s (\u6c34\u6392\u51fa\u5916\u754c)' : '\u5df2\u5173\u95ed'}`, 510, 325);
+
+  // 天气预报
+  if (getForecastDays() > 0) {
+    drawRoundedRect(ctx, 10, 350, 300, 80, 8, 'rgba(15, 30, 45, 0.65)');
+    ctx.fillStyle = '#a0b0c0';
+    ctx.font = 'bold 13px "Segoe UI", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('\u{1F324} \u5929\u6c14\u9884\u62a5', 20, 370);
+    ctx.font = '12px "Segoe UI", sans-serif';
+    state.forecast.forEach((f, i) => {
+      const fx = 20 + i * 95;
+      const s = SEASONS[f.season];
+      ctx.fillStyle = f.isStorm ? '#e17055' : s.color;
+      ctx.fillText(`${f.day}\u65e5 ${f.isStorm ? '\u{26C8}' : '\u{1F327}'} ${f.rain}`, fx, 390);
+    });
+  }
+
+  // 升级面板
+  drawRoundedRect(ctx, 490, 350, 460, 280, 10, 'rgba(15, 30, 45, 0.88)');
+  ctx.fillStyle = '#e0eaf2';
+  ctx.font = 'bold 16px "Segoe UI", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('\u{26A1} \u7535\u529b\u5347\u7ea7', 510, 375);
+
+  const upStartX = 510, upStartY = 390;
+  const upW = 210, upH = 58, upGap = 6;
+
+  UPGRADES.forEach((up, i) => {
+    const col = i % 2, row = Math.floor(i / 2);
+    const ux = upStartX + col * (upW + upGap);
+    const uy = upStartY + row * (upH + upGap);
+    const level = state.upgrades[up.id] || 0;
+    const cost = up.cost(level);
+    const canAfford = state.power >= cost;
+    const maxed = level >= up.maxLevel;
+    const isHovered = state.hoveredButton && state.hoveredButton.id === 'upgrade_' + up.id;
+
+    let bg = '#1a2a3a';
+    if (maxed) bg = '#1a3a2a';
+    else if (!canAfford) bg = '#1a202a';
+    else if (isHovered) bg = '#2a4a6a';
+
+    drawRoundedRect(ctx, ux, uy, upW, upH, 6, bg);
+    if (isHovered && canAfford && !maxed) { ctx.strokeStyle = '#3a8bc4'; ctx.lineWidth = 1.5; ctx.stroke(); }
+
+    ctx.font = '18px "Segoe UI", sans-serif';
+    ctx.fillStyle = '#e0eaf2';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText(up.icon, ux + 6, uy + 6);
+
+    ctx.font = 'bold 12px "Segoe UI", sans-serif';
+    ctx.fillStyle = maxed ? '#2dd4a8' : '#e0eaf2';
+    ctx.fillText(up.name, ux + 32, uy + 8);
+
+    ctx.font = '10px "Segoe UI", sans-serif';
+    ctx.fillStyle = '#5a6a7a';
+    ctx.fillText(`Lv.${level}/${up.maxLevel}`, ux + 32, uy + 22);
+
+    ctx.font = '9px "Segoe UI", sans-serif';
+    ctx.fillStyle = '#7a8a9a';
+    ctx.fillText(up.desc, ux + 6, uy + 40);
+
+    if (!maxed) {
+      ctx.font = 'bold 11px "Segoe UI", sans-serif';
+      ctx.fillStyle = canAfford ? '#f7b731' : '#5a4a3a';
+      ctx.textAlign = 'right';
+      ctx.fillText(`${formatNum(cost)} \u{26A1}`, ux + upW - 6, uy + 8);
+    } else {
+      ctx.font = 'bold 10px "Segoe UI", sans-serif';
+      ctx.fillStyle = '#2dd4a8';
+      ctx.textAlign = 'right';
+      ctx.fillText('\u{2705} \u5df2\u6ee1\u7ea7', ux + upW - 6, uy + 8);
+    }
+
+    state.buttons.push({ id: 'upgrade_' + up.id, x: ux, y: uy, w: upW, h: upH });
+  });
+
+  // 底部提示
+  drawRoundedRect(ctx, 10, 600, 940, 30, 6, 'rgba(20, 35, 50, 0.6)');
+  ctx.fillStyle = '#7a8a9a';
+  ctx.font = '12px "Segoe UI", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('\u{2139}\u{FE0F} \u5f00\u95f8\u6cc4\u6d2a\u53d1\u7535 \u00b7 \u6392\u6c34\u6e20\u6392\u6c34\u5230\u5916\u754c \u00b7 \u70b9\u51fb\u4e91\u6735\u964d\u96e8 \u00b7 \u{1F916}AI\u8f85\u52a9\u81ea\u52a8\u7ba1\u7406\u6c34\u4f4d \u00b7 \u7a7a\u683c\u6682\u505c', 20, 618);
+
+  // 粒子渲染
+  drawParticles();
+
+  // 消息
+  state.messages.forEach((m, i) => {
+    const my = 440 + i * 24;
+    ctx.globalAlpha = m.alpha;
+    ctx.fillStyle = m.color;
+    ctx.font = 'bold 14px "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(m.text, 480, my);
+    ctx.globalAlpha = 1;
+  });
+}
+
+// ==================== 暂停覆盖层 ====================
+function drawPauseOverlay() {
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawRoundedRect(ctx, 310, 200, 340, 240, 12, 'rgba(20, 35, 50, 0.96)');
+
+  ctx.fillStyle = '#4ecdc4';
+  ctx.font = 'bold 28px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('\u23F8 \u6e38\u620f\u6682\u505c', 480, 240);
+
+  // 状态信息
+  ctx.fillStyle = 'rgba(160, 176, 192, 0.6)';
+  ctx.font = '12px "Segoe UI", sans-serif';
+  ctx.fillText(`\u50a8\u6c34 ${Math.floor(state.reservoir)}/${Math.floor(getEffectiveMax())} \u00b7 \u4e0b\u6e38 ${Math.floor(state.downstream)}/${Math.floor(getDownstreamMax())} \u00b7 \u7535\u529b ${formatNum(state.power)}`, 480, 275);
+
+  // 按钮
+  const btnW = 200, btnH = 42, btnX = 380;
+  const resumeHovered = mouse.x >= btnX && mouse.x <= btnX + btnW && mouse.y >= 300 && mouse.y <= 300 + btnH;
+  const restartHovered = mouse.x >= btnX && mouse.x <= btnX + btnW && mouse.y >= 352 && mouse.y <= 352 + btnH;
+  const menuHovered = mouse.x >= btnX && mouse.x <= btnX + btnW && mouse.y >= 404 && mouse.y <= 404 + btnH;
+
+  const r1 = drawButton(ctx, btnX, 300, btnW, btnH, '\u7ee7\u7eed\u6e38\u620f', '\u25B6', false, false, resumeHovered);
+  state.buttons.push({ id: 'btn_resume', ...r1 });
+
+  const r2 = drawButton(ctx, btnX, 352, btnW, btnH, '\u91cd\u65b0\u5f00\u59cb', '\u{1F504}', false, false, restartHovered);
+  state.buttons.push({ id: 'btn_restart', ...r2 });
+
+  const r3 = drawButton(ctx, btnX, 404, btnW, btnH, '\u56de\u5230\u4e3b\u83dc\u5355', '\u{1F3E0}', false, false, menuHovered);
+  state.buttons.push({ id: 'btn_menu', ...r3 });
+}
+
+// ==================== 游戏结束覆盖层 ====================
+function drawGameOverOverlay() {
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawRoundedRect(ctx, 260, 170, 440, 320, 12, 'rgba(20, 35, 50, 0.95)');
+
+  ctx.fillStyle = '#e74c3c';
+  ctx.font = 'bold 28px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('\u{1F30A} \u6e38\u620f\u7ed3\u675f', 480, 220);
+
+  ctx.fillStyle = '#c0d0e0';
+  ctx.font = '16px "Segoe UI", sans-serif';
+  ctx.fillText(state.gameOverReason, 480, 265);
+
+  ctx.fillStyle = '#a0b0c0';
+  ctx.font = '14px "Segoe UI", sans-serif';
+  ctx.fillText(`\u5b58\u6d3b\u5929\u6570: ${state.day}  |  \u603b\u7535\u529b: ${formatNum(state.power)}  |  \u5f97\u5206: ${Math.floor(state.score)}`, 480, 305);
+  ctx.fillText(`\u7ecf\u5386\u5b63\u8282: ${state.survivedSeasons}`, 480, 330);
+
+  const btnW = 200, btnH = 42, btnX = 380;
+  const restartHovered = mouse.x >= btnX && mouse.x <= btnX + btnW && mouse.y >= 360 && mouse.y <= 360 + btnH;
+  const menuHovered = mouse.x >= btnX && mouse.x <= btnX + btnW && mouse.y >= 412 && mouse.y <= 412 + btnH;
+
+  const r1 = drawButton(ctx, btnX, 360, btnW, btnH, '\u91cd\u65b0\u5f00\u59cb', '\u{1F504}', false, false, restartHovered);
+  state.buttons.push({ id: 'gameover_restart', ...r1 });
+
+  const r2 = drawButton(ctx, btnX, 412, btnW, btnH, '\u56de\u5230\u4e3b\u83dc\u5355', '\u{1F3E0}', false, false, menuHovered);
+  state.buttons.push({ id: 'gameover_menu', ...r2 });
+}
+
+// ==================== 河道绘制 ====================
+function drawRiver() {
+  // 主河道
+  ctx.fillStyle = 'rgba(10, 25, 40, 0.6)';
+  const riverPath = new Path2D();
+  const start = getRiverPoint(0);
+  riverPath.moveTo(start.x - 15, start.y);
+  for (let t = 0; t <= 1; t += 0.02) {
+    const p = getRiverPoint(t);
+    riverPath.lineTo(p.x - 15 + Math.sin(t * Math.PI * 4) * 2, p.y);
+  }
+  for (let t = 1; t >= 0; t -= 0.02) {
+    const p = getRiverPoint(t);
+    riverPath.lineTo(p.x + 15 + Math.sin(t * Math.PI * 4) * 2, p.y);
+  }
+  riverPath.closePath();
+  ctx.fill(riverPath);
+
+  // 排水渠沟道
+  if (state.drainageOpen || state.drainageDrops.length > 0) {
+    ctx.strokeStyle = 'rgba(50, 40, 30, 0.55)';
+    ctx.lineWidth = 12;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    const ds0 = getDrainagePoint(0);
+    ctx.moveTo(ds0.x, ds0.y);
+    for (let t = 0.02; t <= 1; t += 0.02) {
+      const p = getDrainagePoint(t); ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(70, 60, 45, 0.35)';
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(ds0.x, ds0.y);
+    for (let t = 0.02; t <= 1; t += 0.02) {
+      const p = getDrainagePoint(t); ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+    ctx.lineCap = 'butt';
+  }
+
+  // 泄洪河道水流效果
+  const totalTransit = state.inTransitWater.reduce((s, w) => s + w.amount, 0);
+  if (totalTransit > 0 || state.floodgateOpen) {
+    ctx.strokeStyle = 'rgba(30, 136, 196, 0.25)';
+    ctx.lineWidth = 22;
+    ctx.beginPath();
+    const s0 = getRiverPoint(0);
+    ctx.moveTo(s0.x, s0.y);
+    for (let t = 0.02; t <= 1; t += 0.02) {
+      const p = getRiverPoint(t); ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(100, 181, 246, 0.4)';
+    ctx.lineWidth = 3;
+    const flowOffset = (state.totalTime * 1.5) % 1;
+    for (let wave = 0; wave < 3; wave++) {
+      const waveT = (flowOffset + wave * 0.33) % 1;
+      const p = getRiverPoint(waveT);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 5 + wave * 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  state.inTransitWater.forEach(flow => {
+    const p = getRiverPoint(flow.progress);
+    const size = 5 + Math.min(flow.amount * 0.4, 12);
+    ctx.fillStyle = `rgba(100, 181, 246, ${0.6 + flow.progress * 0.3})`;
+    ctx.beginPath(); ctx.arc(p.x, p.y, size, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = `rgba(220, 245, 255, ${0.35 + flow.progress * 0.3})`;
+    ctx.beginPath(); ctx.arc(p.x - size * 0.3, p.y - size * 0.3, size * 0.25, 0, Math.PI * 2); ctx.fill();
+    const powerPreview = Math.floor(flow.amount * getPowerMultiplier());
+    if (powerPreview >= 1) {
+      ctx.fillStyle = `rgba(247, 183, 49, ${0.5 + flow.progress * 0.4})`;
+      ctx.font = 'bold 10px "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`+${powerPreview}\u{26A1}`, p.x, p.y - size - 6);
+    }
+  });
+
+  ctx.fillStyle = 'rgba(100, 160, 210, 0.4)';
+  ctx.font = '11px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  const mid = getRiverPoint(0.5);
+  ctx.fillText('\u{1F4A7} \u6cb3\u9053', mid.x, mid.y - 20);
+  if (totalTransit > 0) {
+    ctx.fillStyle = 'rgba(100, 181, 246, 0.5)';
+    ctx.font = '10px "Segoe UI", sans-serif';
+    ctx.fillText(`\u6d41\u52a8\u4e2d: ${totalTransit.toFixed(1)}`, mid.x, mid.y + 20);
+  }
+
+  // 排水渠水滴绘制
+  if (state.drainageDrops.length > 0) {
+    state.drainageDrops.forEach(drop => {
+      const p = getDrainagePoint(drop.progress);
+      ctx.fillStyle = 'rgba(100, 200, 220, 0.8)';
+      ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(200, 240, 255, 0.6)';
+      ctx.beginPath(); ctx.arc(p.x - 1.5, p.y - 1.5, 1.5, 0, Math.PI * 2); ctx.fill();
+    });
+    const dmid = getDrainagePoint(0.5);
+    ctx.fillStyle = 'rgba(180, 140, 100, 0.5)';
+    ctx.font = '10px "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('\u{1F6E3} \u6392\u6c34\u6e20', dmid.x, dmid.y - 14);
+  }
+}
+
+// ==================== 村庄绘制 ====================
+function drawVillage() {
+  const villageX = 510, villageY = 165, villageW = 420, villageH = 140;
+  // 地面渐变
+  const groundGrad = ctx.createLinearGradient(0, villageY + 55, 0, villageY + villageH);
+  groundGrad.addColorStop(0, '#1e301e');
+  groundGrad.addColorStop(1, '#152818');
+  drawRoundedRect(ctx, villageX, villageY + 55, villageW, 85, 5, groundGrad);
+
+  // 草地纹理点
+  ctx.fillStyle = 'rgba(60, 100, 50, 0.3)';
+  for (let i = 0; i < 20; i++) {
+    const gx = villageX + 10 + (i * 37 + state.day * 7) % (villageW - 20);
+    const gy = villageY + 62 + (i * 13) % 75;
+    ctx.fillRect(gx, gy, 2, 2);
+  }
+
+  // 树木装饰
+  const trees = [
+    { x: 520, y: 248 }, { x: 670, y: 252 }, { x: 820, y: 248 }, { x: 920, y: 250 }
+  ];
+  trees.forEach(t => {
+    ctx.fillStyle = '#3a2818';
+    ctx.fillRect(t.x - 1.5, t.y - 5, 3, 8);
+    ctx.fillStyle = '#2d5a2d';
+    ctx.beginPath(); ctx.arc(t.x, t.y - 8, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#3a7a3a';
+    ctx.beginPath(); ctx.arc(t.x - 2, t.y - 10, 5, 0, Math.PI * 2); ctx.fill();
+  });
+
+  const floodH = villageH * (state.downstream / getDownstreamMax());
+  const waterLevel = villageY + villageH - floodH;
+  if (floodH > 0) {
+    const ratio = state.downstream / getDownstreamMax();
+    // 洪水渐变填充
+    const floodGrad = ctx.createLinearGradient(0, waterLevel, 0, villageY + villageH);
+    if (ratio >= 0.85) {
+      floodGrad.addColorStop(0, 'rgba(231, 76, 60, 0.5)');
+      floodGrad.addColorStop(1, 'rgba(180, 30, 20, 0.6)');
+    } else if (ratio >= CONFIG.highWaterThreshold) {
+      floodGrad.addColorStop(0, 'rgba(243, 156, 18, 0.4)');
+      floodGrad.addColorStop(1, 'rgba(200, 120, 10, 0.5)');
+    } else if (ratio < CONFIG.dryThreshold) {
+      floodGrad.addColorStop(0, 'rgba(212, 165, 116, 0.2)');
+      floodGrad.addColorStop(1, 'rgba(180, 140, 90, 0.3)');
+    } else {
+      floodGrad.addColorStop(0, 'rgba(30, 136, 196, 0.3)');
+      floodGrad.addColorStop(1, 'rgba(10, 70, 120, 0.4)');
+    }
+    ctx.fillStyle = floodGrad;
+    ctx.fillRect(villageX, waterLevel, villageW, floodH);
+    // 水面波纹
+    if (floodH > 3) {
+      ctx.strokeStyle = ratio >= 0.85 ? 'rgba(255, 100, 80, 0.4)' : 'rgba(120, 200, 255, 0.3)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i <= villageW; i += 6) {
+        const wave = Math.sin(i * 0.05 + state.totalTime * 1.8) * 2;
+        if (i === 0) ctx.moveTo(villageX + i, waterLevel + wave);
+        else ctx.lineTo(villageX + i, waterLevel + wave);
+      }
+      ctx.stroke();
+    }
+  }
+
+  const houses = [
+    { x: 535, y: 222, w: 30, h: 25 }, { x: 580, y: 212, w: 35, h: 30 },
+    { x: 635, y: 228, w: 28, h: 22 }, { x: 685, y: 218, w: 32, h: 28 },
+    { x: 740, y: 232, w: 26, h: 20 }, { x: 785, y: 222, w: 34, h: 26 },
+    { x: 840, y: 228, w: 30, h: 24 }, { x: 885, y: 218, w: 28, h: 22 },
+  ];
+
+  let activeHouses = 0;
+  houses.forEach(h => {
+    const houseBottom = h.y + h.h;
+    const isFlooded = houseBottom > waterLevel;
+    if (!isFlooded) activeHouses++;
+
+    // 房屋主体
+    ctx.fillStyle = isFlooded ? '#6b5340' : '#c9a86c';
+    ctx.fillRect(h.x, h.y, h.w, h.h);
+    // 房屋阴影
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.fillRect(h.x + h.w - 4, h.y, 4, h.h);
+    // 屋顶
+    ctx.fillStyle = isFlooded ? '#4a3528' : '#a0522d';
+    ctx.beginPath();
+    ctx.moveTo(h.x - 3, h.y); ctx.lineTo(h.x + h.w / 2, h.y - 10); ctx.lineTo(h.x + h.w + 3, h.y);
+    ctx.closePath(); ctx.fill();
+    // 屋顶高光
+    if (!isFlooded) {
+      ctx.fillStyle = 'rgba(255,255,255,0.1)';
+      ctx.beginPath();
+      ctx.moveTo(h.x - 3, h.y); ctx.lineTo(h.x + h.w / 2, h.y - 10);
+      ctx.lineTo(h.x + h.w / 2 - 2, h.y - 6); ctx.lineTo(h.x, h.y);
+      ctx.closePath(); ctx.fill();
+    }
+
+    if (isFlooded) {
+      ctx.fillStyle = '#2a1f15';
+      ctx.fillRect(h.x + 5, h.y + 8, 6, 8);
+      ctx.fillRect(h.x + h.w - 11, h.y + 8, 6, 8);
+    } else {
+      ctx.fillStyle = '#ffe082';
+      ctx.fillRect(h.x + 5, h.y + 8, 6, 8);
+      ctx.fillStyle = 'rgba(255, 224, 130, 0.2)';
+      ctx.beginPath(); ctx.arc(h.x + 8, h.y + 12, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffe082';
+      ctx.fillRect(h.x + h.w - 11, h.y + 8, 6, 8);
+      ctx.fillStyle = 'rgba(255, 224, 130, 0.2)';
+      ctx.beginPath(); ctx.arc(h.x + h.w - 8, h.y + 12, 7, 0, Math.PI * 2); ctx.fill();
+    }
+  });
+
+  const housePowerTotal = activeHouses * CONFIG.housePowerRate;
+  ctx.fillStyle = activeHouses > 0 ? 'rgba(255, 224, 130, 0.7)' : 'rgba(100, 100, 100, 0.5)';
+  ctx.font = '11px "Segoe UI", sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(`\u{1F3E0} ${activeHouses}/${CONFIG.houseCount} \u623f\u5c4b\u8fd0\u4f5c \u00b7 +${housePowerTotal.toFixed(1)}\u{26A1}/s`, villageX + villageW - 5, villageY + 15);
+
+  ctx.fillStyle = 'rgba(45, 212, 168, 0.06)';
+  const safeTop = villageY + villageH * (1 - CONFIG.highWaterThreshold);
+  const safeBottom = villageY + villageH * (1 - CONFIG.dryThreshold);
+  ctx.fillRect(villageX, safeTop, villageW, safeBottom - safeTop);
+  ctx.fillStyle = 'rgba(45, 212, 168, 0.35)';
+  ctx.font = '10px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('\u5b89\u5168\u6c34\u4f4d\u533a\u95f4', villageX + villageW / 2, safeTop + 11);
+}
+
+// ==================== 粒子渲染 ====================
+function drawParticles() {
+  state.particles.forEach(p => {
+    const alpha = clamp(p.life / (p.maxLife || p.life), 0, 1);
+    if (p.type === 'raindrop') {
+      ctx.strokeStyle = `rgba(160, 210, 255, ${alpha * 0.7})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.x + p.vx * 3, p.y + p.vy * 3);
+      ctx.stroke();
+    } else if (p.type === 'ripple') {
+      ctx.strokeStyle = `rgba(100, 181, 246, ${alpha * 0.5})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, p.size, p.size * 0.4, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (p.type === 'powerfloat') {
+      ctx.fillStyle = `rgba(247, 183, 49, ${alpha})`;
+      ctx.font = `bold ${p.size}px "Segoe UI", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(p.text, p.x, p.y);
+    } else if (p.type === 'sparkle') {
+      ctx.fillStyle = `rgba(247, 183, 49, ${alpha})`;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+    }
+  });
+}
+
+// ==================== 游戏循环 ====================
+let lastTime = 0;
+function gameLoop(timestamp) {
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+  lastTime = timestamp;
+  update(dt);
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>

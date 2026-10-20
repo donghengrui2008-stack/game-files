@@ -1,0 +1,2095 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>连击风暴 - 找出弱点，一击粉碎</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+  body {
+    background: #1a1a2e;
+    color: #eee;
+    font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  #game-container {
+    width: 100%;
+    max-width: 600px;
+    height: 100vh;
+    position: relative;
+    overflow: hidden;
+    background: #16213e;
+  }
+
+  /* 开始界面 */
+  #start-screen {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    justify-content: center; align-items: center;
+    background: #1a1a2e;
+    z-index: 100;
+    transition: opacity 0.5s;
+  }
+  #start-screen h1 {
+    font-size: 42px;
+    color: #e94560;
+    text-shadow: 0 0 20px rgba(233,69,96,0.5);
+    margin-bottom: 10px;
+  }
+  #start-screen .subtitle {
+    font-size: 16px;
+    color: #aaa;
+    margin-bottom: 40px;
+  }
+  .btn {
+    padding: 14px 40px;
+    font-size: 18px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: transform 0.2s, box-shadow 0.2s;
+    margin: 8px;
+    font-family: inherit;
+  }
+  .btn:hover { transform: scale(1.05); }
+  .btn-primary {
+    background: #e94560;
+    color: white;
+    box-shadow: 0 4px 15px rgba(233,69,96,0.4);
+  }
+  .btn-secondary {
+    background: #0f3460;
+    color: #eee;
+    box-shadow: 0 4px 15px rgba(15,52,96,0.4);
+  }
+
+  /* 游戏主界面 */
+  #game-screen {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+  }
+  #top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: #0f3460;
+    font-size: 14px;
+  }
+  #level-info { font-weight: bold; color: #e94560; }
+  #shard-count { color: #ffd700; }
+  #target-area {
+    flex: 1;
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+  }
+
+  /* 物品 */
+  #target-object {
+    position: relative;
+    transition: transform 0.1s;
+    cursor: crosshair;
+  }
+  .object-emoji {
+    font-size: 120px;
+    display: block;
+    transition: filter 0.3s;
+  }
+  .object-name {
+    text-align: center;
+    font-size: 18px;
+    color: #ccc;
+    margin-top: 8px;
+  }
+
+  /* 弱点标记 - 圆点 */
+  .weakness {
+    position: absolute;
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    background: rgba(233,69,96,0.25);
+    border: 3px solid #e94560;
+    cursor: pointer;
+    animation: weaknessLife var(--shrink-dur, 2.5s) linear forwards, weaknessPulseGlow 0.6s ease-in-out infinite alternate;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 10;
+    transform-origin: center center;
+  }
+  /* 出生弹出 + 缓慢收缩到最小后消失 */
+  @keyframes weaknessLife {
+    0%   { transform: scale(0); opacity: 0; }
+    8%   { transform: scale(1.5); opacity: 1; }
+    10%  { transform: scale(1.4); opacity: 1; }
+    85%  { transform: scale(0.12); opacity: 1; }
+    100% { transform: scale(0.05); opacity: 0; }
+  }
+  @keyframes weaknessPulseGlow {
+    from { box-shadow: 0 0 8px rgba(233,69,96,0.4); }
+    to { box-shadow: 0 0 20px rgba(233,69,96,0.9); }
+  }
+
+  /* 盾牌旋转容器 */
+  .shield-container {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    animation: shieldRotate 2.5s linear infinite;
+  }
+  @keyframes shieldRotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  /* 盾牌正方形 - 套在圆内部，同心 */
+  .shield-square {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 60px;
+    height: 60px;
+    margin: -30px 0 0 -30px;
+    border: 2.5px solid #ffd700;
+    border-radius: 4px;
+    box-shadow: 0 0 8px rgba(255,215,0,0.5), inset 0 0 5px rgba(255,215,0,0.25);
+    transform-origin: center center;
+    animation: shieldSpawn 0.3s ease-out forwards, shieldPulse 1.2s ease-in-out 0.3s infinite;
+  }
+  /* 盾牌出生动画 */
+  @keyframes shieldSpawn {
+    0%   { transform: rotate(var(--rot, 0deg)) scale(0); opacity: 0; }
+    60%  { transform: rotate(var(--rot, 0deg)) scale(1.15); opacity: 1; }
+    100% { transform: rotate(var(--rot, 0deg)) scale(1); opacity: 1; }
+  }
+  /* 发光脉冲增加科技感 */
+  @keyframes shieldPulse {
+    0%, 100% { opacity: 0.75; border-color: #ffd700; box-shadow: 0 0 6px rgba(255,215,0,0.3), inset 0 0 3px rgba(255,215,0,0.15); }
+    50%      { opacity: 1; border-color: #ffee88; box-shadow: 0 0 12px rgba(255,215,0,0.6), inset 0 0 6px rgba(255,215,0,0.3); }
+  }
+  /* 盾牌破碎消失 */
+  @keyframes shieldBreak {
+    0%   { transform: rotate(var(--rot, 0deg)) scale(1); opacity: 1; }
+    100% { transform: rotate(var(--rot, 0deg)) scale(1.6); opacity: 0; }
+  }
+
+  /* 点击特效 */
+  .hit-effect {
+    position: absolute;
+    pointer-events: none;
+    font-size: 28px;
+    font-weight: bold;
+    color: #e94560;
+    animation: hitFloat 0.8s ease-out forwards;
+    z-index: 20;
+  }
+  @keyframes hitFloat {
+    0% { opacity: 1; transform: translateY(0) scale(1); }
+    100% { opacity: 0; transform: translateY(-60px) scale(1.5); }
+  }
+
+  /* 连击特效 */
+  .combo-text {
+    position: absolute;
+    pointer-events: none;
+    font-size: 36px;
+    font-weight: bold;
+    color: #ffd700;
+    text-shadow: 0 0 10px rgba(255,215,0,0.8);
+    animation: comboPop 1s ease-out forwards;
+    z-index: 25;
+  }
+  @keyframes comboPop {
+    0% { opacity: 1; transform: scale(0.5); }
+    30% { transform: scale(1.3); }
+    100% { opacity: 0; transform: scale(1) translateY(-80px); }
+  }
+
+  /* HP条 */
+  #hp-bar-container {
+    position: absolute;
+    bottom: 120px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 280px;
+    height: 24px;
+    background: #333;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 2px solid #555;
+  }
+  #hp-bar {
+    height: 100%;
+    background: #e94560;
+    transition: width 0.2s;
+    border-radius: 12px;
+  }
+  #hp-text {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 13px;
+    font-weight: bold;
+    color: white;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+  }
+
+  /* 底部信息 */
+  #bottom-info {
+    position: absolute;
+    bottom: 60px;
+    left: 0; right: 0;
+    text-align: center;
+    font-size: 14px;
+    color: #888;
+  }
+
+  /* 按钮栏 */
+  #action-bar {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    padding: 12px;
+    background: #0f3460;
+  }
+  .action-btn {
+    padding: 10px 24px;
+    font-size: 15px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+    font-family: inherit;
+    transition: transform 0.2s;
+  }
+  .action-btn:hover { transform: scale(1.05); }
+
+  /* 加点界面 */
+  #shop-screen {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    background: #1a1a2e;
+    z-index: 50;
+    overflow-y: auto;
+  }
+  #shop-header {
+    padding: 16px;
+    background: #0f3460;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  #shop-header h2 { color: #e94560; }
+  #shop-shards { color: #ffd700; font-size: 18px; font-weight: bold; }
+  #shop-items {
+    flex: 1;
+    padding: 16px;
+    overflow-y: auto;
+  }
+  .shop-item {
+    background: #16213e;
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border: 1px solid #2a2a4a;
+  }
+  .shop-item-info { flex: 1; }
+  .shop-item-name { font-size: 16px; font-weight: bold; color: #eee; }
+  .shop-item-desc { font-size: 13px; color: #aaa; margin-top: 4px; }
+  .shop-item-level { font-size: 12px; color: #e94560; margin-top: 4px; }
+  .shop-item-btn {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+    font-family: inherit;
+    font-size: 14px;
+    margin-left: 12px;
+    white-space: nowrap;
+  }
+  .shop-item-btn.can-buy {
+    background: #e94560;
+    color: white;
+  }
+  .shop-item-btn.cannot-buy {
+    background: #444;
+    color: #888;
+    cursor: not-allowed;
+  }
+  .shop-item-btn.maxed {
+    background: #2a5a3a;
+    color: #7f7;
+    cursor: default;
+  }
+
+  /* 选关界面悬浮按钮 */
+  .level-fab {
+    position: fixed;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    font-size: 22px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+    z-index: 60;
+    transition: transform 0.2s;
+    font-family: inherit;
+  }
+  .level-fab:hover { transform: translateY(-50%) scale(1.1); }
+  #fab-shop {
+    left: 12px;
+    background: #0f3460;
+    color: #eee;
+  }
+  #fab-settings {
+    right: 12px;
+    background: #0f3460;
+    color: #eee;
+  }
+
+  /* 兑换码界面 */
+  #redeem-screen {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    background: #1a1a2e;
+    z-index: 50;
+    overflow-y: auto;
+  }
+
+  /* 关卡选择 */
+  #level-screen {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    background: #1a1a2e;
+    z-index: 50;
+    overflow-y: auto;
+  }
+  #level-header {
+    padding: 16px;
+    background: #0f3460;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  #level-header h2 { color: #e94560; }
+  #level-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    padding: 16px;
+  }
+  .level-card {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+    cursor: pointer;
+    border: 2px solid #2a2a4a;
+    transition: transform 0.2s, border-color 0.2s;
+  }
+  .level-card:hover { transform: scale(1.03); }
+  .level-card.locked {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .level-card.current {
+    border-color: #e94560;
+    box-shadow: 0 0 15px rgba(233,69,96,0.3);
+  }
+  .level-card.completed {
+    border-color: #4a9;
+  }
+  .level-emoji { font-size: 48px; margin-bottom: 8px; }
+  .level-name { font-size: 16px; font-weight: bold; color: #eee; }
+  .level-status { font-size: 12px; color: #aaa; margin-top: 4px; }
+
+  /* 结算界面 */
+  #result-screen {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: rgba(0,0,0,0.85);
+    z-index: 80;
+  }
+  #result-screen h2 {
+    font-size: 36px;
+    color: #e94560;
+    margin-bottom: 16px;
+  }
+  .result-stat {
+    font-size: 18px;
+    color: #ccc;
+    margin: 6px 0;
+  }
+  .result-shards {
+    font-size: 28px;
+    color: #ffd700;
+    margin: 16px 0;
+  }
+
+  /* 屏幕震动 */
+  @keyframes shake {
+    0%, 100% { transform: translate(0, 0); }
+    20% { transform: translate(-8px, 8px); }
+    40% { transform: translate(8px, -8px); }
+    60% { transform: translate(-5px, 5px); }
+    80% { transform: translate(5px, -5px); }
+  }
+  .shake {
+    animation: shake 0.3s ease-in-out;
+  }
+
+  /* 粒子效果 */
+  .particle {
+    position: absolute;
+    pointer-events: none;
+    border-radius: 50%;
+    animation: particleFly 0.6s ease-out forwards;
+  }
+  @keyframes particleFly {
+    0% { opacity: 1; transform: scale(1); }
+    100% { opacity: 0; transform: scale(0) translate(var(--tx), var(--ty)); }
+  }
+
+  /* 自动打击指示器 */
+  #auto-hit-indicator {
+    position: absolute;
+    top: 60px;
+    right: 16px;
+    font-size: 12px;
+    color: #4a9;
+    background: rgba(0,0,0,0.5);
+    padding: 4px 10px;
+    border-radius: 4px;
+    display: none;
+  }
+
+  /* 暂停菜单 */
+  #pause-overlay {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.85);
+    z-index: 80;
+  }
+  #pause-overlay h2 {
+    font-size: 32px;
+    color: #fff;
+    margin-bottom: 30px;
+    text-shadow: 0 0 20px rgba(255,255,255,0.3);
+  }
+  .pause-btn {
+    width: 200px;
+    padding: 14px 0;
+    margin: 8px 0;
+    font-size: 16px;
+    border: 2px solid #4a9;
+    border-radius: 10px;
+    background: rgba(74,169,74,0.15);
+    color: #4a9;
+    cursor: pointer;
+    font-weight: bold;
+    font-family: inherit;
+    transition: all 0.2s;
+  }
+  .pause-btn:hover { background: rgba(74,169,74,0.3); }
+  .pause-btn.danger { border-color: #e94560; color: #e94560; background: rgba(233,69,96,0.15); }
+  .pause-btn.danger:hover { background: rgba(233,69,96,0.3); }
+
+  /* 设置面板 */
+  .settings-box {
+    background: rgba(255,255,255,0.05);
+    border-radius: 12px;
+    width: 260px;
+    padding: 20px;
+  }
+  .settings-box .opt-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    font-size: 15px;
+    color: #ccc;
+  }
+  .settings-box .opt-row:last-of-type {
+    margin-bottom: 0;
+  }
+  .settings-box .btn-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 16px;
+  }
+  .settings-box .btn-group .pause-btn {
+    width: 100%;
+    margin: 0;
+    box-sizing: border-box;
+  }
+  .tswitch {
+    width: 44px;
+    height: 24px;
+    background: #555;
+    border-radius: 12px;
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  .tswitch.on { background: #4a9; }
+  .tswitch::after {
+    content: '';
+    position: absolute;
+    width: 20px; height: 20px;
+    background: #fff;
+    border-radius: 50%;
+    top: 2px; left: 2px;
+    transition: left 0.2s;
+  }
+  .tswitch.on::after { left: 22px; }
+
+  /* 天赋选择界面 */
+  #talent-screen {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    background: #0d0d1a;
+    z-index: 90;
+    overflow-y: auto;
+  }
+  #talent-header {
+    padding: 20px;
+    text-align: center;
+    background: linear-gradient(180deg, #1a0a2e, #0d0d1a);
+  }
+  #talent-header h2 {
+    font-size: 28px;
+    color: #bb86fc;
+    text-shadow: 0 0 15px rgba(187,134,252,0.5);
+    margin-bottom: 8px;
+  }
+  #talent-header p {
+    font-size: 14px;
+    color: #999;
+  }
+  #talent-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 16px;
+    align-items: center;
+  }
+  .talent-card {
+    background: #16213e;
+    border: 2px solid #2a2a4a;
+    border-radius: 10px;
+    padding: 12px 16px;
+    width: 100%;
+    max-width: 500px;
+    cursor: pointer;
+    transition: all 0.3s;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .talent-card:hover {
+    transform: scale(1.02);
+    border-color: #bb86fc;
+    box-shadow: 0 0 15px rgba(187,134,252,0.3);
+  }
+  .talent-card.selected {
+    border-color: #bb86fc;
+    background: #1a1a3e;
+    box-shadow: 0 0 20px rgba(187,134,252,0.5);
+  }
+  .talent-card .talent-icon {
+    font-size: 32px;
+    flex-shrink: 0;
+    width: 40px;
+    text-align: center;
+  }
+  .talent-card .talent-info { flex: 1; min-width: 0; }
+  .talent-card .talent-name {
+    font-size: 15px;
+    font-weight: bold;
+    color: #bb86fc;
+    margin-bottom: 2px;
+  }
+  .talent-card .talent-desc {
+    font-size: 12px;
+    color: #aaa;
+    line-height: 1.4;
+  }
+  .talent-card .talent-desc .talent-hint {
+    color: #6ec6ff;
+    font-size: 11px;
+    margin-top: 2px;
+  }
+  .talent-card .talent-check { font-size: 22px; color: #bb86fc; flex-shrink: 0; opacity: 0; transition: opacity 0.2s; }
+  .talent-card.selected .talent-check { opacity: 1; }
+  .talent-badge { font-size: 10px; color: #6ec6ff; background: rgba(110,198,255,0.15); padding: 1px 6px; border-radius: 4px; margin-left: 6px; vertical-align: middle; }
+  .talent-card.already-unlocked { border-color: #2a4a6a; }
+  #talent-confirm-bar {
+    padding: 16px;
+    text-align: center;
+    background: #0f0f1a;
+  }
+  #talent-confirm-btn {
+    padding: 14px 50px;
+    font-size: 18px;
+    border: none;
+    border-radius: 10px;
+    background: #bb86fc;
+    color: #1a1a2e;
+    cursor: pointer;
+    font-weight: bold;
+    font-family: inherit;
+    transition: all 0.2s;
+  }
+  #talent-confirm-btn:hover { transform: scale(1.05); box-shadow: 0 0 20px rgba(187,134,252,0.5); }
+  #talent-confirm-btn:disabled { background: #444; color: #888; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  /* 已选天赋显示 */
+  #active-talents {
+    position: absolute;
+    top: 50px;
+    right: 16px;
+    font-size: 11px;
+    color: #bb86fc;
+    background: rgba(0,0,0,0.5);
+    padding: 4px 8px;
+    border-radius: 4px;
+    display: none;
+    max-width: 200px;
+  }
+
+  /* 以逸待劳就绪指示 */
+  #rest-buff-indicator {
+    position: absolute;
+    top: 80px;
+    left: 16px;
+    font-size: 12px;
+    color: #ff8c42;
+    background: rgba(0,0,0,0.5);
+    padding: 4px 10px;
+    border-radius: 4px;
+    display: none;
+    z-index: 30;
+    animation: restBuffPulse 0.8s ease-in-out infinite alternate;
+  }
+  @keyframes restBuffPulse {
+    from { opacity: 0.7; }
+    to { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+<div id="game-container">
+
+  <!-- 开始界面 -->
+  <div id="start-screen">
+    <h1>连击风暴</h1>
+    <div class="subtitle">找到弱点，一击粉碎！</div>
+    <div style="font-size:11px;color:#555;margin-bottom:20px;">v14.0 暂停菜单版</div>
+    <div id="reincarnation-count" style="font-size:12px;color:#bb86fc;margin-bottom:20px;display:none;"></div>
+    <button class="btn btn-primary" onclick="showLevelSelect()">开始游戏</button>
+    <button class="btn btn-secondary" onclick="showShopFromMenu()">能力加点</button>
+  </div>
+
+  <!-- 游戏主界面 -->
+  <div id="game-screen">
+    <div id="top-bar">
+      <div id="level-info">第1关 - 蚂蚁</div>
+      <div id="shard-count">碎片: 0</div>
+    </div>
+    <div id="auto-hit-indicator">自动打击: +0/秒</div>
+
+    <div id="active-talents"></div>
+    <div id="rest-buff-indicator">以逸待劳: 伤害翻倍!</div>
+    <div id="target-area">
+      <div id="target-object">
+        <span class="object-emoji" id="object-emoji">🐜</span>
+        <div class="object-name" id="object-name">蚂蚁</div>
+      </div>
+      <div id="hp-bar-container">
+        <div id="hp-bar" style="width: 100%"></div>
+        <div id="hp-text">100/100</div>
+      </div>
+      <div id="bottom-info">点击红色弱点标记进行攻击！</div>
+    </div>
+    <div id="action-bar">
+      <button class="action-btn btn-secondary" onclick="pauseGame()">暂停</button>
+      <button class="action-btn btn-primary" onclick="showShopFromGame()">加点</button>
+      <button class="action-btn btn-secondary" onclick="exitToMenu()">退出</button>
+    </div>
+
+    <!-- 暂停菜单 -->
+    <div id="pause-overlay">
+      <h2>已暂停</h2>
+      <button class="pause-btn" onclick="resumeGame()">继续游戏</button>
+      <button class="pause-btn" onclick="toggleSettings()">设置</button>
+      <div id="settings-panel" style="display:none;margin-top:20px;">
+        <div class="settings-box">
+          <div class="opt-row">
+            <span>音效</span>
+            <div class="tswitch on" id="sound-toggle" onclick="setToggle('sound')"></div>
+          </div>
+          <div class="opt-row">
+            <span>震动</span>
+            <div class="tswitch on" id="shake-toggle" onclick="setToggle('shake')"></div>
+          </div>
+          <div class="btn-group">
+            <button class="pause-btn" onclick="tryReincarnation()">轮回</button>
+            <button class="pause-btn danger" onclick="fullReincarnation()">完全轮回</button>
+          </div>
+        </div>
+      </div>
+      <button class="pause-btn" onclick="exitToMenu()">返回主菜单</button>
+    </div>
+  </div>
+
+  <!-- 加点界面 -->
+  <div id="shop-screen">
+    <div id="shop-header">
+      <h2>能力加点</h2>
+      <div id="shop-shards">碎片: 0</div>
+    </div>
+    <div id="shop-items"></div>
+    <div id="action-bar">
+      <button class="action-btn btn-secondary" onclick="showRedeem()">兑换码</button>
+      <button class="action-btn btn-secondary" onclick="closeShop()">返回</button>
+    </div>
+  </div>
+
+  <!-- 兑换码界面 -->
+  <div id="redeem-screen">
+    <div id="shop-header">
+      <h2>兑换码</h2>
+      <div></div>
+    </div>
+    <div style="padding:20px;text-align:center;">
+      <input id="redeem-input" type="text" placeholder="输入兑换码..." style="width:100%;padding:12px;font-size:16px;border:2px solid #2a2a4a;border-radius:8px;background:#16213e;color:#eee;font-family:inherit;outline:none;text-align:center;" onfocus="this.style.borderColor='#bb86fc'" onblur="this.style.borderColor='#2a2a4a'">
+      <button class="btn btn-primary" style="margin-top:16px;width:100%;" onclick="redeemCode()">兑换</button>
+    </div>
+    <div id="action-bar">
+      <button class="action-btn btn-secondary" onclick="showShopFromRedeem()">返回加点</button>
+    </div>
+  </div>
+
+  <!-- 关卡选择 -->
+  <div id="level-screen">
+    <div id="level-header">
+      <h2>选择关卡</h2>
+      <button class="btn btn-secondary" onclick="closeLevelSelect()">返回</button>
+    </div>
+    <div id="level-grid"></div>
+    <button id="fab-shop" class="level-fab" onclick="showShopFromMenu()" title="能力加点">🛒</button>
+    <button id="fab-settings" class="level-fab" onclick="openLevelSettings()" title="设置">⚙️</button>
+
+    <!-- 选关设置覆盖层 -->
+    <div id="level-settings-overlay" style="position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,0.85);z-index:80;">
+      <h2 style="font-size:28px;color:#fff;margin-bottom:30px;text-shadow:0 0 20px rgba(255,255,255,0.3);">设置</h2>
+      <div class="settings-box">
+        <div class="opt-row">
+          <span>音效</span>
+          <div class="tswitch on" id="level-sound-toggle" onclick="setToggleLevel('sound')"></div>
+        </div>
+        <div class="opt-row">
+          <span>震动</span>
+          <div class="tswitch on" id="level-shake-toggle" onclick="setToggleLevel('shake')"></div>
+        </div>
+        <div class="btn-group">
+          <button class="pause-btn" onclick="tryReincarnation()">轮回</button>
+          <button class="pause-btn danger" onclick="fullReincarnation()">完全轮回</button>
+          <button class="pause-btn" onclick="closeLevelSettings()">关闭</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 结算界面 -->
+  <div id="result-screen">
+    <h2 id="result-title">击碎成功！</h2>
+    <div class="result-stat" id="result-time">用时: 15.3秒</div>
+    <div class="result-stat" id="result-hits">击中: 25次</div>
+    <div class="result-shards" id="result-shards">+50 碎片</div>
+    <button class="btn btn-primary" onclick="nextLevel()">下一关</button>
+    <button class="btn btn-secondary" onclick="exitToLevelSelect()">返回选关</button>
+  </div>
+
+  <!-- 天赋选择界面 -->
+  <div id="talent-screen">
+    <div id="talent-header">
+      <h2 id="talent-title">选择天赋</h2>
+      <p id="talent-subtitle">请从以下天赋中选择3个带入本次轮回</p>
+    </div>
+    <div id="talent-cards"></div>
+    <div id="talent-confirm-bar">
+      <button id="talent-confirm-btn" onclick="confirmTalents()" disabled>确认选择 (0/3)</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ==================== 游戏数据 ====================
+const LEVELS = [
+  { id: 0,  name: '蚂蚁',   emoji: '🐜', hp: 10,    weakDuration: 2500, weakInterval: 1200, shards: 15,  shields: 0 },
+  { id: 1,  name: '木板',   emoji: '🌲', hp: 30,    weakDuration: 2300, weakInterval: 1200, shards: 25,  shields: 0 },
+  { id: 2,  name: '老鼠',   emoji: '🐭', hp: 60,    weakDuration: 2200, weakInterval: 1100, shards: 40,  shields: 0 },
+  { id: 3,  name: '石头',   emoji: '🗿', hp: 100,   weakDuration: 2100, weakInterval: 1100, shards: 55,  shields: 0 },
+  { id: 4,  name: '铁罐',   emoji: '🥫', hp: 180,   weakDuration: 1900, weakInterval: 1000, shards: 75,  shields: 1 },
+  { id: 5,  name: '野兔',   emoji: '🐇', hp: 380,   weakDuration: 1800, weakInterval: 1000, shards: 100, shields: 1 },
+  { id: 6,  name: '大象',   emoji: '🐘', hp: 650,   weakDuration: 1700, weakInterval: 950,  shards: 140, shields: 1 },
+  { id: 7,  name: '汽车',   emoji: '🚗', hp: 1000,  weakDuration: 1600, weakInterval: 900,  shards: 190, shields: 2 },
+  { id: 8,  name: '大楼',   emoji: '🏢', hp: 1600,  weakDuration: 1500, weakInterval: 850, shards: 260, shields: 2 },
+  { id: 9,  name: '山峰',   emoji: '🏔️', hp: 2800,  weakDuration: 1400, weakInterval: 800, shards: 360, shields: 3 },
+  { id: 10, name: '小行星', emoji: '🌑', hp: 5000,  weakDuration: 1300, weakInterval: 750, shards: 500, shields: 3 },
+  { id: 11, name: '陨石',   emoji: '☄️', hp: 8000,  weakDuration: 1200, weakInterval: 700, shards: 700, shields: 3 },
+  { id: 12, name: '月球',   emoji: '🌙', hp: 12000, weakDuration: 1100, weakInterval: 650, shards: 1000, shields: 4 },
+  { id: 13, name: '火星',   emoji: '🔴', hp: 18000, weakDuration: 1000, weakInterval: 600, shards: 1500, shields: 4 },
+  { id: 14, name: '地球',   emoji: '🌍', hp: 28000, weakDuration: 950,  weakInterval: 550, shards: 2500, shields: 5 }
+];
+
+const UPGRADES = [
+  { id: 'damage', name: '重拳伤害', desc: '每次点击弱点造成的伤害', maxLevel: 20, baseCost: 10, costScale: 1.5, baseValue: 2, valueScale: 2 },
+  { id: 'double', name: '双连拳', desc: '有概率同时穿透两层（破盾+打本体）', maxLevel: 5, baseCost: 30, costScale: 2.0, baseValue: 0, valueScale: 0.15 },
+  { id: 'triple', name: '三连拳', desc: '有概率同时穿透三层（需双连拳满级）', maxLevel: 5, baseCost: 80, costScale: 2.2, baseValue: 0, valueScale: 0.08 },
+  { id: 'duration', name: '弱点锁定', desc: '弱点标记持续时间更长', maxLevel: 5, baseCost: 25, costScale: 1.8, baseValue: 0, valueScale: 0.20 },
+  { id: 'frequency', name: '弱点感知', desc: '弱点出现频率更高', maxLevel: 5, baseCost: 25, costScale: 1.8, baseValue: 0, valueScale: 0.15 },
+  { id: 'auto', name: '自动打击', desc: '场外自动每秒造成伤害，升级提升频率和伤害', maxLevel: 10, baseCost: 40, costScale: 1.5, baseValue: 0, valueScale: 1, hideWhenTalent: 'auto_click' },
+  { id: 'crit', name: '暴击精通', desc: '有概率造成2.5倍暴击伤害', maxLevel: 5, baseCost: 50, costScale: 1.8, baseValue: 0, valueScale: 0.10 },
+  { id: 'autoclick', name: '自动攻击加速', desc: '升级提升自动点击弱点的频率（需连击风暴天赋）', maxLevel: 10, baseCost: 50, costScale: 1.5, baseValue: 0, valueScale: 1, requiresTalent: 'auto_click' },
+  { id: 'restduration', name: '以逸待劳-加速', desc: '减少以逸待劳的休息时间（需天赋）', maxLevel: 5, baseCost: 40, costScale: 1.7, baseValue: 0, valueScale: 0.15, requiresTalent: 'wait_strike' }
+];
+
+// ==================== 天赋池 ====================
+const TALENT_POOL = [
+  { id: 'strong_body', name: '强壮体魄', icon: '💪', desc: '初始攻击力3，每级伤害+3（原为+2）', hint: '加点变化：重拳伤害每级从+2变为+3' },
+  { id: 'thrifty', name: '勤俭持家', icon: '💰', desc: '每次点击25%概率获得1-3额外碎片' },
+  { id: 'wait_strike', name: '以逸待劳', icon: '⏳', desc: '停止攻击3秒后下次伤害翻倍', hint: '加点变化：解锁「以逸待劳-加速」升级项' },
+  { id: 'auto_click', name: '连击风暴', icon: '⚡', desc: '自动打击变为自动点击真实弱点，每200ms一次', hint: '加点变化：解锁「自动打击加速」升级项' },
+  { id: 'berserk', name: '狂暴之怒', icon: '🔥', desc: '目标HP低于30%时伤害+50%' },
+  { id: 'lucky_strike', name: '幸运一击', icon: '🍀', desc: '15%概率造成3倍伤害' },
+  { id: 'shield_breaker', name: '破盾专家', icon: '🛡️', desc: '打盾伤害从50%提升至75%' },
+  { id: 'greed', name: '贪欲之心', icon: '💎', desc: '所有碎片奖励+50%' }
+];
+
+// ==================== 游戏状态 ====================
+let gameState = {
+  currentLevel: 0,
+  shards: 0,
+  unlockedLevel: 0,
+  upgrades: {},
+  inGame: false,
+  paused: false,
+  currentHP: 0,
+  maxHP: 0,
+  weaknesses: [],
+  spawnTimer: null,
+  autoHitTimer: null,
+  startTime: 0,
+  hits: 0,
+  combo: 0,
+  lastHitTime: 0,
+  // 轮回与天赋
+  reincarnationCount: 0,
+  activeTalents: [],
+  unlockedTalents: [],
+  // 自动打击相关
+  autoHitTimer: null,
+  // 以逸待劳
+  restBuffReady: false,
+  restTimer: null,
+  // 天赋选择临时状态
+  talentChoices: [],
+  selectedTalents: [],
+  // 设置
+  settings: {
+    sound: true,
+    shake: true
+  }
+};
+
+// 存档版本 - 改动机制时递增，自动清除旧存档
+const SAVE_VERSION = 14;
+// 初始化存档
+function loadSave() {
+  const save = localStorage.getItem('shatterMasterSave');
+  if (save) {
+    const data = JSON.parse(save);
+    // 版本不匹配：清除旧存档，从头开始
+    if (!data.version || data.version !== SAVE_VERSION) {
+      localStorage.removeItem('shatterMasterSave');
+      UPGRADES.forEach(u => { gameState.upgrades[u.id] = 0; });
+      return;
+    }
+    gameState.shards = data.shards || 0;
+    gameState.unlockedLevel = data.unlockedLevel || 0;
+    gameState.upgrades = data.upgrades || {};
+    gameState.currentLevel = data.currentLevel || 0;
+    gameState.reincarnationCount = data.reincarnationCount || 0;
+    gameState.activeTalents = data.activeTalents || [];
+    gameState.unlockedTalents = data.unlockedTalents || [];
+    if (data.settings) gameState.settings = data.settings;
+  }
+  UPGRADES.forEach(u => {
+    if (!gameState.upgrades[u.id]) gameState.upgrades[u.id] = 0;
+  });
+  updateReincarnationDisplay();
+}
+
+function saveGame() {
+  localStorage.setItem('shatterMasterSave', JSON.stringify({
+    version: SAVE_VERSION,
+    shards: gameState.shards,
+    unlockedLevel: gameState.unlockedLevel,
+    upgrades: gameState.upgrades,
+    currentLevel: gameState.currentLevel,
+    reincarnationCount: gameState.reincarnationCount,
+    activeTalents: gameState.activeTalents,
+    unlockedTalents: gameState.unlockedTalents,
+    settings: gameState.settings
+  }));
+}
+
+// ==================== 天赋辅助 ====================
+function hasTalent(id) {
+  return gameState.activeTalents.includes(id);
+}
+
+function updateReincarnationDisplay() {
+  const el = document.getElementById('reincarnation-count');
+  if (gameState.unlockedTalents.length > 0 || gameState.reincarnationCount > 0) {
+    el.style.display = 'block';
+    const talentNames = gameState.unlockedTalents.map(t => {
+      const tp = TALENT_POOL.find(p => p.id === t);
+      return tp ? tp.icon : '';
+    }).join(' ');
+    el.innerHTML = `已解锁天赋 (${gameState.unlockedTalents.length}): ${talentNames}`;
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+// ==================== 音效系统 ====================
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new AudioCtx();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+// 合成音效：点击弱点
+function playHitSound() {
+  if (!gameState.settings.sound) return;
+  ensureAudio();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(220, audioCtx.currentTime + 0.08);
+  gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
+  osc.start(audioCtx.currentTime);
+  osc.stop(audioCtx.currentTime + 0.08);
+}
+
+// 合成音效：破盾
+function playShieldBreakSound() {
+  if (!gameState.settings.sound) return;
+  ensureAudio();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.15);
+  gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+  osc.start(audioCtx.currentTime);
+  osc.stop(audioCtx.currentTime + 0.15);
+}
+
+// 合成音效：粉碎目标
+function playShatterSound() {
+  if (!gameState.settings.sound) return;
+  ensureAudio();
+  // 低频重击
+  const osc1 = audioCtx.createOscillator();
+  const gain1 = audioCtx.createGain();
+  osc1.connect(gain1);
+  gain1.connect(audioCtx.destination);
+  osc1.type = 'sine';
+  osc1.frequency.setValueAtTime(150, audioCtx.currentTime);
+  osc1.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.3);
+  gain1.gain.setValueAtTime(0.2, audioCtx.currentTime);
+  gain1.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+  osc1.start(audioCtx.currentTime);
+  osc1.stop(audioCtx.currentTime + 0.3);
+  // 高频碎裂
+  const osc2 = audioCtx.createOscillator();
+  const gain2 = audioCtx.createGain();
+  osc2.connect(gain2);
+  gain2.connect(audioCtx.destination);
+  osc2.type = 'square';
+  osc2.frequency.setValueAtTime(1200, audioCtx.currentTime);
+  osc2.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.2);
+  gain2.gain.setValueAtTime(0.08, audioCtx.currentTime);
+  gain2.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+  osc2.start(audioCtx.currentTime);
+  osc2.stop(audioCtx.currentTime + 0.2);
+}
+
+// 合成音效：购买升级
+function playBuySound() {
+  if (!gameState.settings.sound) return;
+  ensureAudio();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(523, audioCtx.currentTime);
+  osc.frequency.setValueAtTime(659, audioCtx.currentTime + 0.06);
+  osc.frequency.setValueAtTime(784, audioCtx.currentTime + 0.12);
+  gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+  osc.start(audioCtx.currentTime);
+  osc.stop(audioCtx.currentTime + 0.25);
+}
+
+// 合成音效：暴击/连击
+function playComboSound(combo) {
+  if (!gameState.settings.sound) return;
+  ensureAudio();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.type = 'triangle';
+  const baseFreq = 440 + combo * 80;
+  osc.frequency.setValueAtTime(baseFreq, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(baseFreq * 2, audioCtx.currentTime + 0.1);
+  gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
+  osc.start(audioCtx.currentTime);
+  osc.stop(audioCtx.currentTime + 0.12);
+}
+
+// ==================== 核心功能 ====================
+function getUpgradeLevel(id) { return gameState.upgrades[id] || 0; }
+
+function getUpgradeValue(id) {
+  const up = UPGRADES.find(u => u.id === id);
+  const lvl = getUpgradeLevel(id);
+  return up.baseValue + up.valueScale * lvl;
+}
+
+function getUpgradeCost(id) {
+  const up = UPGRADES.find(u => u.id === id);
+  const lvl = getUpgradeLevel(id);
+  return Math.floor(up.baseCost * Math.pow(up.costScale, lvl));
+}
+
+function getDamage() {
+  let dmg;
+  // 强壮体魄天赋：基础伤害3，每级+3
+  if (hasTalent('strong_body')) {
+    dmg = 3 + getUpgradeLevel('damage') * 3;
+  } else {
+    dmg = getUpgradeValue('damage');
+  }
+
+  // 以逸待劳：翻倍
+  if (gameState.restBuffReady) {
+    dmg *= 2;
+    gameState.restBuffReady = false;
+    document.getElementById('rest-buff-indicator').style.display = 'none';
+  }
+
+  // 暴击
+  let crit = false;
+  if (Math.random() < getUpgradeValue('crit')) {
+    dmg *= 2.5;
+    crit = true;
+  }
+
+  // 幸运一击天赋：15%概率3倍伤害
+  if (hasTalent('lucky_strike') && Math.random() < 0.15) {
+    dmg *= 3;
+    crit = true;
+  }
+
+  // 狂暴之怒天赋：HP<30%时+50%
+  if (hasTalent('berserk') && gameState.currentHP > 0 && gameState.currentHP / gameState.maxHP < 0.3) {
+    dmg = Math.ceil(dmg * 1.5);
+  }
+
+  return { damage: Math.ceil(dmg), crit: crit };
+}
+
+function getWeakDuration() {
+  const level = LEVELS[gameState.currentLevel];
+  const bonus = getUpgradeValue('duration');
+  return level.weakDuration * (1 + bonus);
+}
+
+function getWeakInterval() {
+  const level = LEVELS[gameState.currentLevel];
+  const bonus = getUpgradeValue('frequency');
+  return level.weakInterval / (1 + bonus);
+}
+
+function getShieldCount(levelIdx) {
+  return LEVELS[levelIdx].shields || 0;
+}
+
+function getShieldAngles(count) {
+  if (count <= 0) return [];
+  if (count === 1) return [0];
+  if (count === 2) return [0, 45];
+  if (count === 3) return [0, 30, 60];
+  if (count === 4) return [0, 22.5, 45, 67.5];
+  const step = 360 / count;
+  return Array.from({length: count}, (_, i) => i * step);
+}
+
+function getMaxConcurrentWeaknesses() {
+  const shieldCount = getShieldCount(gameState.currentLevel);
+  if (shieldCount === 0) return 3;   // 无盾：最多3个
+  return 2;                           // 有盾：最多2个
+}
+
+// ==================== 界面切换 ====================
+function showScreen(id) {
+  ['start-screen', 'game-screen', 'shop-screen', 'redeem-screen', 'level-screen', 'result-screen', 'talent-screen'].forEach(s => {
+    const el = document.getElementById(s);
+    if (!el) return;
+    if (s === id) {
+      el.style.display = 'flex';
+      if (s === 'shop-screen' || s === 'level-screen' || s === 'talent-screen' || s === 'redeem-screen') el.style.flexDirection = 'column';
+    } else {
+      el.style.display = 'none';
+    }
+  });
+}
+
+function showShopFromMenu() {
+  renderShop();
+  showScreen('shop-screen');
+}
+
+function showShopFromGame() {
+  gameState.paused = true;
+  renderShop();
+  showScreen('shop-screen');
+}
+
+function closeShop() {
+  if (gameState.inGame) {
+    showScreen('game-screen');
+    gameState.paused = false;
+    scheduleNextWeakness();
+  } else {
+    showScreen('start-screen');
+  }
+}
+
+function showLevelSelect() {
+  renderLevels();
+  showScreen('level-screen');
+}
+
+function closeLevelSelect() {
+  document.getElementById('level-settings-overlay').style.display = 'none';
+  showScreen('start-screen');
+}
+
+function exitToMenu() {
+  stopGame();
+  showScreen('start-screen');
+}
+
+function exitToLevelSelect() {
+  stopGame();
+  renderLevels();
+  showScreen('level-screen');
+}
+
+// ==================== 关卡渲染 ====================
+function renderLevels() {
+  const grid = document.getElementById('level-grid');
+  grid.innerHTML = '';
+  LEVELS.forEach((lv, idx) => {
+    const card = document.createElement('div');
+    card.className = 'level-card';
+    if (idx > gameState.unlockedLevel) card.classList.add('locked');
+    else if (idx === gameState.currentLevel) card.classList.add('current');
+    else if (idx < gameState.currentLevel) card.classList.add('completed');
+
+    let status = '';
+    if (idx > gameState.unlockedLevel) status = '未解锁';
+    else if (idx < gameState.currentLevel) status = '已完成';
+    else status = '当前关卡';
+
+    card.innerHTML = `
+      <div class="level-emoji">${lv.emoji}</div>
+      <div class="level-name">${lv.name}</div>
+      <div class="level-status">${status}</div>
+    `;
+    if (idx <= gameState.unlockedLevel) {
+      card.onclick = () => startLevel(idx);
+    }
+    grid.appendChild(card);
+  });
+}
+
+// ==================== 商店渲染 ====================
+function renderShop() {
+  document.getElementById('shop-shards').textContent = `碎片: ${gameState.shards}`;
+  const container = document.getElementById('shop-items');
+  container.innerHTML = '';
+
+  UPGRADES.forEach(up => {
+    // 需要天赋的升级项：未拥有对应天赋则跳过
+    if (up.requiresTalent && !hasTalent(up.requiresTalent)) return;
+    // 拥有天赋后隐藏的升级项（被天赋替换）
+    if (up.hideWhenTalent && hasTalent(up.hideWhenTalent)) return;
+
+    const lvl = getUpgradeLevel(up.id);
+    const cost = getUpgradeCost(up.id);
+    const maxed = lvl >= up.maxLevel;
+    const canBuy = gameState.shards >= cost && !maxed;
+    const locked = up.id === 'triple' && getUpgradeLevel('double') < 5;
+
+    const item = document.createElement('div');
+    item.className = 'shop-item';
+
+    let btnClass = 'shop-item-btn';
+    let btnText = '';
+    if (locked) { btnClass += ' cannot-buy'; btnText = '需双连拳满级'; }
+    else if (maxed) { btnClass += ' maxed'; btnText = '已满级'; }
+    else if (canBuy) { btnClass += ' can-buy'; btnText = `${cost} 碎片`; }
+    else { btnClass += ' cannot-buy'; btnText = `${cost} 碎片`; }
+
+    const currentValue = up.baseValue + up.valueScale * lvl;
+    const nextValue = up.baseValue + up.valueScale * (lvl + 1);
+
+    item.innerHTML = `
+      <div class="shop-item-info">
+        <div class="shop-item-name">${up.name}</div>
+        <div class="shop-item-desc">${up.desc}</div>
+        <div class="shop-item-level">等级: ${lvl}/${up.maxLevel} ${!maxed ? `(当前: ${currentValue.toFixed(2)}${up.id==='duration'||up.id==='frequency'||up.id==='double'||up.id==='triple'||up.id==='crit'?'':'/次'} → 下一级: ${nextValue.toFixed(2)}${up.id==='duration'||up.id==='frequency'||up.id==='double'||up.id==='triple'||up.id==='crit'?'':'/次'})` : ''}</div>
+      </div>
+      <button class="${btnClass}" onclick="buyUpgrade('${up.id}')" ${(!canBuy || locked) ? 'disabled' : ''}>${btnText}</button>
+    `;
+    container.appendChild(item);
+  });
+}
+
+function buyUpgrade(id) {
+  const up = UPGRADES.find(u => u.id === id);
+  const lvl = getUpgradeLevel(id);
+  if (lvl >= up.maxLevel) return;
+  if (id === 'triple' && getUpgradeLevel('double') < 5) return;
+  const cost = getUpgradeCost(id);
+  if (gameState.shards < cost) return;
+
+  gameState.shards -= cost;
+  gameState.upgrades[id] = lvl + 1;
+  saveGame();
+  playBuySound();
+  renderShop();
+}
+
+// ==================== 游戏逻辑 ====================
+function startLevel(levelIdx) {
+  gameState.currentLevel = levelIdx;
+  gameState.inGame = true;
+  gameState.paused = false;
+  gameState.currentHP = LEVELS[levelIdx].hp;
+  gameState.maxHP = LEVELS[levelIdx].hp;
+  gameState.hits = 0;
+  gameState.combo = 0;
+  gameState.startTime = Date.now();
+
+  showScreen('game-screen');
+
+  const lv = LEVELS[levelIdx];
+  document.getElementById('level-info').textContent = `第${levelIdx+1}关 - ${lv.name}`;
+  document.getElementById('object-emoji').textContent = lv.emoji;
+  document.getElementById('object-name').textContent = lv.name;
+  document.getElementById('shard-count').textContent = `碎片: ${gameState.shards}`;
+  updateHPBar();
+
+  // 显示自动打击指示器
+  const hasStorm = hasTalent('auto_click');
+  const autoInd = document.getElementById('auto-hit-indicator');
+  if (hasStorm) {
+    // 连击风暴：基础1000ms，每级autoclick减80ms，最低200ms
+    const clickLvl = getUpgradeLevel('autoclick');
+    const interval = Math.max(200, 1000 - clickLvl * 80);
+    autoInd.style.display = 'block';
+    autoInd.textContent = `连击风暴: 每${interval}ms自动点击弱点`;
+  } else {
+    const autoLvl = getUpgradeLevel('auto');
+    if (autoLvl > 0) {
+      const dmg = autoLvl;
+      const interval = Math.max(500, 2000 - (autoLvl - 1) * 150);
+      autoInd.style.display = 'block';
+      autoInd.textContent = `自动打击: +${dmg}/次 (每${interval}ms)`;
+    } else {
+      autoInd.style.display = 'none';
+    }
+  }
+
+  // 清除旧弱点
+  clearAllWeaknesses();
+
+  // 显示天赋相关UI
+  updateTalentUI();
+
+  // 初始化以逸待劳
+  if (hasTalent('wait_strike')) {
+    resetRestTimer();
+  }
+
+  // 启动弱点生成
+  scheduleNextWeakness();
+
+  // 启动自动打击
+  if (gameState.autoHitTimer) clearInterval(gameState.autoHitTimer);
+  if (hasStorm) {
+    // 连击风暴：无条件启动（有天赋就有效果），autoclick只提升频率
+    const clickLvl = getUpgradeLevel('autoclick');
+    const interval = Math.max(200, 1000 - clickLvl * 80);
+    gameState.autoHitTimer = setInterval(() => {
+      if (gameState.inGame && !gameState.paused) {
+        const weaknesses = gameState.weaknesses;
+        if (weaknesses.length > 0) {
+          const w = weaknesses[Math.floor(Math.random() * weaknesses.length)];
+          hitWeakness(w.element, null);
+        }
+      }
+    }, interval);
+  } else {
+    // 普通自动打击：买了auto升级才有效果
+    const autoLvl = getUpgradeLevel('auto');
+    if (autoLvl > 0) {
+      const dmg = autoLvl;
+      const interval = Math.max(500, 2000 - (autoLvl - 1) * 150);
+      gameState.autoHitTimer = setInterval(() => {
+        if (gameState.inGame && !gameState.paused) {
+          damageObject(dmg, false);
+          showHitEffect(document.getElementById('target-object'), dmg, false, true);
+        }
+      }, interval);
+    }
+  }
+}
+
+function stopGame() {
+  gameState.inGame = false;
+  gameState.paused = false;
+  clearAllWeaknesses();
+  if (gameState.spawnTimer) clearTimeout(gameState.spawnTimer);
+  if (gameState.autoHitTimer) clearInterval(gameState.autoHitTimer);
+  if (gameState.restTimer) clearTimeout(gameState.restTimer);
+  gameState.restBuffReady = false;
+  document.getElementById('rest-buff-indicator').style.display = 'none';
+}
+
+function pauseGame() {
+  if (!gameState.inGame) return;
+  gameState.paused = true;
+  const overlay = document.getElementById('pause-overlay');
+  overlay.style.display = 'flex';
+  document.getElementById('settings-panel').style.display = 'none';
+}
+
+function resumeGame() {
+  gameState.paused = false;
+  document.getElementById('pause-overlay').style.display = 'none';
+  document.getElementById('settings-panel').style.display = 'none';
+  scheduleNextWeakness();
+}
+
+function toggleSettings() {
+  const panel = document.getElementById('settings-panel');
+  panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+}
+
+function setToggle(key) {
+  gameState.settings[key] = !gameState.settings[key];
+  const el = document.getElementById(key === 'sound' ? 'sound-toggle' : 'shake-toggle');
+  if (el) el.className = 'tswitch' + (gameState.settings[key] ? ' on' : '');
+  saveGame();
+}
+
+function setToggleLevel(key) {
+  gameState.settings[key] = !gameState.settings[key];
+  const el = document.getElementById(key === 'sound' ? 'level-sound-toggle' : 'level-shake-toggle');
+  if (el) el.className = 'tswitch' + (gameState.settings[key] ? ' on' : '');
+  saveGame();
+}
+
+function openLevelSettings() {
+  document.getElementById('level-settings-overlay').style.display = 'flex';
+  const s = gameState.settings.sound, k = gameState.settings.shake;
+  const st = document.getElementById('level-sound-toggle');
+  const sk = document.getElementById('level-shake-toggle');
+  if (st) st.className = 'tswitch' + (s ? ' on' : '');
+  if (sk) sk.className = 'tswitch' + (k ? ' on' : '');
+}
+
+function closeLevelSettings() {
+  document.getElementById('level-settings-overlay').style.display = 'none';
+}
+
+// 完全轮回：清空所有进度回到初始状态
+function fullReincarnation() {
+  if (!confirm('确定要完全轮回吗？所有碎片、升级、天赋将被清空，回到初始状态！')) return;
+  try {
+    gameState.shards = 0;
+    gameState.upgrades = {};
+    UPGRADES.forEach(u => { gameState.upgrades[u.id] = 0; });
+    gameState.activeTalents = [];
+    gameState.unlockedTalents = [];
+    gameState.reincarnationCount = 0;
+    saveGame();
+    updateReincarnationDisplay();
+    closeAllOverlays();
+    if (gameState.inGame) stopGame();
+    showScreen('start-screen');
+  } catch (e) {
+    console.error('fullReincarnation error:', e);
+  }
+}
+
+function closeAllOverlays() {
+  const po = document.getElementById('pause-overlay');
+  const sp = document.getElementById('settings-panel');
+  const lso = document.getElementById('level-settings-overlay');
+  if (po) po.style.display = 'none';
+  if (sp) sp.style.display = 'none';
+  if (lso) lso.style.display = 'none';
+}
+
+function scheduleNextWeakness() {
+  if (!gameState.inGame || gameState.paused) return;
+  const interval = getWeakInterval();
+  gameState.spawnTimer = setTimeout(() => {
+    spawnWeakness();
+  }, interval);
+}
+
+function spawnWeakness() {
+  if (!gameState.inGame || gameState.paused) return;
+
+  // 控制同屏数量：无盾最多3个，有盾最多2个
+  const maxWeak = getMaxConcurrentWeaknesses();
+  if (gameState.weaknesses.length >= maxWeak) {
+    scheduleNextWeakness();
+    return;
+  }
+
+  const target = document.getElementById('target-object');
+  const rect = target.getBoundingClientRect();
+  const area = document.getElementById('target-area');
+  const areaRect = area.getBoundingClientRect();
+
+  // 在物品附近随机位置
+  const offsetRange = 80;
+  const x = rect.left - areaRect.left + rect.width/2 + (Math.random()-0.5)*offsetRange*2 - 36;
+  const y = rect.top - areaRect.top + rect.height/2 + (Math.random()-0.5)*offsetRange*2 - 36;
+
+  const weak = document.createElement('div');
+  weak.className = 'weakness';
+  weak.style.left = x + 'px';
+  weak.style.top = y + 'px';
+  weak.onmousedown = (e) => { e.stopPropagation(); hitWeakness(weak, e); };
+  weak.ontouchstart = (e) => { e.stopPropagation(); e.preventDefault(); hitWeakness(weak, e.touches[0]); };
+
+  // 动态设置收缩动画时长 = 消失计时器时长，确保缩到最小后才消失
+  const duration = getWeakDuration();
+  weak.style.setProperty('--shrink-dur', (duration / 1000) + 's');
+
+  // 添加盾牌（正方形，同心，大小浮动）
+  const shieldCount = getShieldCount(gameState.currentLevel);
+  if (shieldCount > 0) {
+    const shieldContainer = document.createElement('div');
+    shieldContainer.className = 'shield-container';
+    const angles = getShieldAngles(shieldCount);
+    angles.forEach(angle => {
+      const sq = document.createElement('div');
+      sq.className = 'shield-square';
+      sq.style.setProperty('--rot', angle + 'deg');
+      // 随机延迟和速度，增加科技感
+      sq.style.animationDelay = (Math.random() * 0.4) + 's';
+      sq.style.animationDuration = (1.0 + Math.random() * 0.5) + 's';
+      shieldContainer.appendChild(sq);
+    });
+    weak.appendChild(shieldContainer);
+  }
+
+  area.appendChild(weak);
+
+  const weaknessId = Date.now() + Math.random();
+  const timer = setTimeout(() => {
+    removeWeakness(weaknessId);
+  }, duration);
+
+  gameState.weaknesses.push({ id: weaknessId, element: weak, timer: timer, shieldsRemaining: shieldCount });
+
+  // 继续生成下一个
+  scheduleNextWeakness();
+}
+
+function removeWeakness(id) {
+  const idx = gameState.weaknesses.findIndex(w => w.id === id);
+  if (idx >= 0) {
+    const w = gameState.weaknesses[idx];
+    clearTimeout(w.timer);
+    if (w.element && w.element.parentNode) {
+      w.element.style.animation = 'none';
+      w.element.style.opacity = '0';
+      setTimeout(() => {
+        if (w.element && w.element.parentNode) w.element.remove();
+      }, 200);
+    }
+    gameState.weaknesses.splice(idx, 1);
+  }
+}
+
+function clearAllWeaknesses() {
+  gameState.weaknesses.forEach(w => {
+    clearTimeout(w.timer);
+    if (w.element && w.element.parentNode) w.element.remove();
+  });
+  gameState.weaknesses = [];
+  if (gameState.spawnTimer) clearTimeout(gameState.spawnTimer);
+}
+
+function hitWeakness(weakEl, event) {
+  if (!gameState.inGame || gameState.paused) return;
+
+  const weakObj = gameState.weaknesses.find(w => w.element === weakEl);
+  if (!weakObj) return;
+
+  // 计算基础伤害
+  const hitResult = getDamage();
+  const baseDmg = hitResult.damage;
+
+  // 确定穿透层数
+  let penetration = 1;
+  let comboCount = 1;
+
+  // 双连拳：增加一层穿透
+  if (Math.random() < getUpgradeValue('double')) {
+    penetration += 1;
+    comboCount = 2;
+  }
+  // 三连拳：再增加一层穿透
+  if (comboCount === 2 && Math.random() < getUpgradeValue('triple')) {
+    penetration += 1;
+    comboCount = 3;
+  }
+
+  // 逐层穿透计算伤害
+  let totalDamage = 0;
+  let shieldsBroken = 0;
+  let hitBody = false;
+  const shieldMult = hasTalent('shield_breaker') ? 0.75 : 0.5;
+  for (let i = 0; i < penetration; i++) {
+    if (weakObj.shieldsRemaining > 0) {
+      // 还有盾：破一层，伤害减半（破盾专家75%）
+      weakObj.shieldsRemaining--;
+      shieldsBroken++;
+      totalDamage += baseDmg * shieldMult;
+    } else {
+      // 没盾了：全额伤害打到本体
+      totalDamage += baseDmg;
+      hitBody = true;
+    }
+  }
+
+  // 勤俭持家天赋：25%概率获得额外碎片
+  if (hasTalent('thrifty') && Math.random() < 0.25) {
+    const extra = 1 + Math.floor(Math.random() * 3);
+    gameState.shards += extra;
+    document.getElementById('shard-count').textContent = `碎片: ${gameState.shards}`;
+    saveGame();
+  }
+
+  // 以逸待劳：重置休息计时器
+  if (hasTalent('wait_strike')) {
+    resetRestTimer();
+  }
+
+  // 如果有盾被破了，更新DOM
+  if (shieldsBroken > 0) {
+    breakShields(weakObj, shieldsBroken);
+    playShieldBreakSound();
+  }
+
+  // 应用伤害
+  damageObject(Math.ceil(totalDamage), hitResult.crit);
+  gameState.hits++;
+  playHitSound();
+
+  // 连击计时
+  const now = Date.now();
+  if (now - gameState.lastHitTime < 800) {
+    gameState.combo++;
+  } else {
+    gameState.combo = 1;
+  }
+  gameState.lastHitTime = now;
+
+  // 特效
+  const targetObject = document.getElementById('target-object');
+  showHitEffect(targetObject, Math.ceil(totalDamage), hitResult.crit, false);
+  if (comboCount > 1) {
+    showComboEffect(targetObject, comboCount, shieldsBroken);
+    playComboSound(comboCount);
+  } else if (shieldsBroken > 0) {
+    showComboEffect(targetObject, 1, shieldsBroken);
+  }
+  if (hitResult.crit) playComboSound(1);
+  shakeScreen();
+  if (event && event.clientX) {
+    spawnParticles(event.clientX, event.clientY);
+  }
+
+  // 只有真正打到本体时才移除弱点；仅破盾则弱点继续存在
+  if (hitBody) {
+    removeWeakness(weakObj.id);
+  }
+}
+
+function breakShields(weakObj, count) {
+  const container = weakObj.element.querySelector('.shield-container');
+  if (!container) return;
+
+  const squares = Array.from(container.querySelectorAll('.shield-square'));
+  // 从最外层开始移除
+  for (let i = 0; i < count && squares.length > 0; i++) {
+    const sq = squares.pop();
+    if (sq) {
+      sq.style.animation = 'shieldBreak 0.25s ease-out forwards';
+      setTimeout(() => {
+        if (sq && sq.parentNode) sq.remove();
+      }, 260);
+    }
+  }
+}
+
+function damageObject(amount, isCrit) {
+  gameState.currentHP -= amount;
+  if (gameState.currentHP <= 0) {
+    gameState.currentHP = 0;
+    updateHPBar();
+    setTimeout(() => levelComplete(), 300);
+  } else {
+    updateHPBar();
+  }
+}
+
+function updateHPBar() {
+  const bar = document.getElementById('hp-bar');
+  const text = document.getElementById('hp-text');
+  const pct = (gameState.currentHP / gameState.maxHP) * 100;
+  bar.style.width = pct + '%';
+  text.textContent = `${Math.ceil(gameState.currentHP)}/${gameState.maxHP}`;
+
+  if (pct > 50) bar.style.background = '#e94560';
+  else if (pct > 25) bar.style.background = '#e9a945';
+  else bar.style.background = '#e94545';
+
+  const emoji = document.getElementById('object-emoji');
+  const cracks = Math.floor((100 - pct) / 20);
+  emoji.style.filter = `brightness(${0.6 + pct/200}) grayscale(${cracks * 0.15})`;
+}
+
+function levelComplete() {
+  stopGame();
+  playShatterSound();
+  const lv = LEVELS[gameState.currentLevel];
+  const time = ((Date.now() - gameState.startTime) / 1000).toFixed(1);
+  const bonus = Math.max(1, Math.floor(lv.shards * (1 + 5 / parseFloat(time))));
+  const finalBonus = hasTalent('greed') ? Math.ceil(bonus * 1.5) : bonus;
+  gameState.shards += finalBonus;
+
+  if (gameState.currentLevel >= gameState.unlockedLevel) {
+    gameState.unlockedLevel = Math.min(gameState.currentLevel + 1, LEVELS.length - 1);
+  }
+  saveGame();
+
+  document.getElementById('result-title').textContent = `${lv.name} 已粉碎！`;
+  document.getElementById('result-time').textContent = `用时: ${time}秒`;
+  document.getElementById('result-hits').textContent = `击中弱点: ${gameState.hits}次`;
+  document.getElementById('result-shards').textContent = `+${finalBonus} 碎片${hasTalent('greed') ? ' (贪欲+50%)' : ''}`;
+  document.getElementById('result-screen').style.display = 'flex';
+}
+
+function nextLevel() {
+  document.getElementById('result-screen').style.display = 'none';
+  if (gameState.currentLevel + 1 < LEVELS.length) {
+    startLevel(gameState.currentLevel + 1);
+  } else {
+    // 通关全部关卡 -> 返回选关
+    exitToLevelSelect();
+  }
+}
+
+// ==================== 视觉效果 ====================
+function showHitEffect(target, damage, isCrit, isAuto) {
+  const area = document.getElementById('target-area');
+  const rect = target.getBoundingClientRect();
+  const areaRect = area.getBoundingClientRect();
+
+  const el = document.createElement('div');
+  el.className = 'hit-effect';
+  el.textContent = (isCrit ? '暴击 ' : '') + `-${damage}`;
+  el.style.color = isCrit ? '#ff4444' : (isAuto ? '#4a9' : '#e94560');
+  if (isCrit) el.style.fontSize = '36px';
+  el.style.left = (rect.left - areaRect.left + rect.width/2 + (Math.random()-0.5)*60) + 'px';
+  el.style.top = (rect.top - areaRect.top + rect.height/2 - 20) + 'px';
+  area.appendChild(el);
+  setTimeout(() => el.remove(), 800);
+}
+
+function showComboEffect(target, count, shieldsBroken) {
+  const area = document.getElementById('target-area');
+  const rect = target.getBoundingClientRect();
+  const areaRect = area.getBoundingClientRect();
+
+  const el = document.createElement('div');
+  el.className = 'combo-text';
+  const names = ['', '', '双连拳！', '三连拳！'];
+  let text = names[count] || `${count}连击！`;
+  if (shieldsBroken > 0) {
+    text += ` 破盾${shieldsBroken}层！`;
+    el.style.color = '#ff8c42';
+  }
+  el.textContent = text;
+  el.style.left = (rect.left - areaRect.left + rect.width/2 - 50) + 'px';
+  el.style.top = (rect.top - areaRect.top - 40) + 'px';
+  area.appendChild(el);
+  setTimeout(() => el.remove(), 1000);
+}
+
+function shakeScreen() {
+  if (!gameState.settings.shake) return;
+  const container = document.getElementById('game-container');
+  container.classList.remove('shake');
+  void container.offsetWidth;
+  container.classList.add('shake');
+  setTimeout(() => container.classList.remove('shake'), 300);
+}
+
+function spawnParticles(x, y) {
+  if (!x || !y) return;
+  const area = document.getElementById('target-area');
+  const areaRect = area.getBoundingClientRect();
+  const localX = x - areaRect.left;
+  const localY = y - areaRect.top;
+
+  for (let i = 0; i < 6; i++) {
+    const p = document.createElement('div');
+    p.className = 'particle';
+    const size = 4 + Math.random() * 6;
+    p.style.width = size + 'px';
+    p.style.height = size + 'px';
+    p.style.background = ['#e94560', '#ff6b6b', '#ffd700', '#ff8c42'][Math.floor(Math.random()*4)];
+    p.style.left = localX + 'px';
+    p.style.top = localY + 'px';
+    const angle = (Math.PI * 2 / 6) * i + Math.random() * 0.5;
+    const dist = 30 + Math.random() * 40;
+    p.style.setProperty('--tx', Math.cos(angle)*dist + 'px');
+    p.style.setProperty('--ty', Math.sin(angle)*dist + 'px');
+    area.appendChild(p);
+    setTimeout(() => p.remove(), 600);
+  }
+}
+
+// ==================== 天赋UI ====================
+function updateTalentUI() {
+  // 已选天赋显示
+  const el = document.getElementById('active-talents');
+  if (gameState.activeTalents.length > 0) {
+    const names = gameState.activeTalents.map(t => {
+      const tp = TALENT_POOL.find(p => p.id === t);
+      return tp ? tp.icon : '';
+    }).join(' ');
+    el.style.display = 'block';
+    el.textContent = '天赋: ' + names;
+  } else {
+    el.style.display = 'none';
+  }
+
+}
+
+// ==================== 以逸待劳 ====================
+function resetRestTimer() {
+  if (gameState.restTimer) clearTimeout(gameState.restTimer);
+  gameState.restBuffReady = false;
+  document.getElementById('rest-buff-indicator').style.display = 'none';
+
+  // 基础3秒，升级减少
+  const restReduce = getUpgradeValue('restduration');
+  const restTime = Math.max(1000, 3000 * (1 - restReduce));
+
+  gameState.restTimer = setTimeout(() => {
+    if (gameState.inGame && !gameState.paused) {
+      gameState.restBuffReady = true;
+      document.getElementById('rest-buff-indicator').style.display = 'block';
+    }
+  }, restTime);
+}
+
+
+
+// ==================== 天赋选择 ====================
+let pendingTalentChoices = [];
+
+let talentPickCount = 3;
+
+function showTalentSelection(count) {
+  try {
+    talentPickCount = count || 3;
+    let pool = [];
+    const unlockedSet = new Set(gameState.unlockedTalents || []);
+
+    TALENT_POOL.forEach(t => {
+      if (unlockedSet.has(t.id)) pool.push(t);
+    });
+
+    const locked = TALENT_POOL.filter(t => !unlockedSet.has(t.id));
+    for (let i = locked.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [locked[i], locked[j]] = [locked[j], locked[i]];
+    }
+    const newCount = Math.min(locked.length, Math.max(3, talentPickCount + 1));
+    pool = pool.concat(locked.slice(0, newCount));
+
+    if (pool.length < talentPickCount) {
+      pool = [...TALENT_POOL];
+    }
+
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+
+    pendingTalentChoices = pool;
+    gameState.selectedTalents = [];
+
+    const titleEl = document.getElementById('talent-title');
+    const subEl = document.getElementById('talent-subtitle');
+    const container = document.getElementById('talent-cards');
+    if (titleEl) titleEl.textContent = '选择天赋';
+    if (subEl) subEl.textContent = `请选择${talentPickCount}个天赋带入本次轮回`;
+    if (container) container.innerHTML = '';
+
+    pendingTalentChoices.forEach(talent => {
+      const card = document.createElement('div');
+      card.className = 'talent-card';
+      if (unlockedSet.has(talent.id)) card.classList.add('already-unlocked');
+      card.onclick = () => toggleTalentSelection(talent.id, card);
+      const hintHtml = talent.hint ? `<div class="talent-hint">${talent.hint}</div>` : '';
+      const badgeHtml = unlockedSet.has(talent.id) ? '<span class="talent-badge">已解锁</span>' : '';
+      card.innerHTML = `
+        <div class="talent-icon">${talent.icon}</div>
+        <div class="talent-info">
+          <div class="talent-name">${talent.name} ${badgeHtml}</div>
+          <div class="talent-desc">${talent.desc}${hintHtml}</div>
+        </div>
+        <div class="talent-check">✅</div>
+      `;
+      if (container) container.appendChild(card);
+    });
+
+    updateTalentConfirmBtn();
+    showScreen('talent-screen');
+  } catch (e) {
+    console.error('showTalentSelection error:', e);
+  }
+}
+
+function toggleTalentSelection(talentId, cardEl) {
+  try {
+    if (!gameState.selectedTalents) gameState.selectedTalents = [];
+    const idx = gameState.selectedTalents.indexOf(talentId);
+    if (idx >= 0) {
+      gameState.selectedTalents.splice(idx, 1);
+      cardEl.classList.remove('selected');
+    } else {
+      if (gameState.selectedTalents.length >= (talentPickCount || 3)) return;
+      gameState.selectedTalents.push(talentId);
+      cardEl.classList.add('selected');
+    }
+    updateTalentConfirmBtn();
+  } catch (e) {
+    console.error('toggleTalentSelection error:', e);
+  }
+}
+
+function updateTalentConfirmBtn() {
+  const btn = document.getElementById('talent-confirm-btn');
+  if (!btn) return;
+  const len = (gameState.selectedTalents || []).length;
+  btn.textContent = `确认选择 (${len}/${talentPickCount || 3})`;
+  btn.disabled = len !== (talentPickCount || 3);
+}
+
+function confirmTalents() {
+  try {
+    if ((gameState.selectedTalents || []).length !== (talentPickCount || 3)) return;
+    gameState.activeTalents = [...gameState.selectedTalents];
+
+    gameState.selectedTalents.forEach(id => {
+      if (!gameState.unlockedTalents.includes(id)) {
+        gameState.unlockedTalents.push(id);
+      }
+    });
+
+    gameState.selectedTalents = [];
+    saveGame();
+    updateReincarnationDisplay();
+    exitToLevelSelect();
+  } catch (e) {
+    console.error('confirmTalents error:', e);
+  }
+}
+
+// ==================== 轮回系统 ====================
+function getReincarnationTalentCount() {
+  const lvl = Number(gameState.unlockedLevel) || 0;
+  const passed = lvl + 1;
+  return Math.floor(passed / 5);
+}
+
+function tryReincarnation() {
+  try {
+    const count = getReincarnationTalentCount();
+    if (count <= 0) {
+      alert('通关至少5关后才能开始轮回！');
+      return;
+    }
+    if (!confirm(`确定进入轮回？\n\n你将获得${count}个天赋选择。\n已解锁的天赋会保留，等级和碎片将重置。`)) return;
+    startReincarnation(count);
+  } catch (e) {
+    console.error('tryReincarnation error:', e);
+  }
+}
+
+function startReincarnation(count) {
+  try {
+    gameState.reincarnationCount++;
+    gameState.currentLevel = 0;
+    gameState.unlockedLevel = 0;
+    gameState.shards = 0;
+    UPGRADES.forEach(u => { gameState.upgrades[u.id] = 0; });
+    gameState.activeTalents = [];
+    saveGame();
+    updateReincarnationDisplay();
+    closeAllOverlays();
+    if (gameState.inGame) stopGame();
+    showScreen('start-screen');
+    requestAnimationFrame(() => {
+      setTimeout(() => showTalentSelection(count), 50);
+    });
+  } catch (e) {
+    console.error('startReincarnation error:', e);
+  }
+}
+
+// ==================== 兑换码 ====================
+const REDEEM_CODES = {
+  'VIP666': () => {
+    gameState.shards += 99999;
+    UPGRADES.forEach(u => { gameState.upgrades[u.id] = u.maxLevel; });
+    gameState.activeTalents = TALENT_POOL.map(t => t.id);
+    gameState.unlockedTalents = TALENT_POOL.map(t => t.id);
+    gameState.reincarnationCount = Math.max(gameState.reincarnationCount, 1);
+    saveGame();
+    updateReincarnationDisplay();
+    return 'VIP666 激活成功！获得99999碎片 + 全部满级 + 全部天赋';
+  }
+};
+
+function showRedeem() {
+  document.getElementById('redeem-input').value = '';
+  showScreen('redeem-screen');
+}
+
+function showShopFromRedeem() {
+  renderShop();
+  showScreen('shop-screen');
+}
+
+function redeemCode() {
+  const input = document.getElementById('redeem-input').value.trim().toUpperCase();
+  if (REDEEM_CODES[input]) {
+    const msg = REDEEM_CODES[input]();
+    alert(msg);
+    showShopFromRedeem();
+  } else {
+    alert('无效的兑换码');
+  }
+}
+
+// ==================== 初始化 ====================
+loadSave();
+updateReincarnationDisplay();
+
+// 适配移动端
+document.addEventListener('touchstart', (e) => {
+  if (e.target.classList.contains('weakness')) {
+    e.preventDefault();
+  }
+}, { passive: false });
+</script>
+</body>
+</html>
